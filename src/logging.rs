@@ -1,11 +1,14 @@
 use std::path::Path;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// Initialize the logging subsystem.
 /// Writes to rolling files in the given logs directory.
-/// In release builds, does not log to stdout.
-pub fn init_logging(logs_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+/// When `console` is true, also writes to stderr so logs are visible in
+/// a console window (used with the `--debug` CLI flag).
+pub fn init_logging(logs_dir: &Path, console: bool) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(logs_dir)?;
 
     let file_appender = RollingFileAppender::builder()
@@ -17,45 +20,33 @@ pub fn init_logging(logs_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
-    // In release mode, only log to file. In debug mode, also log to stderr.
-    #[cfg(debug_assertions)]
-    {
-        use tracing_subscriber::layer::SubscriberExt;
-        use tracing_subscriber::util::SubscriberInitExt;
+    let file_layer = fmt::layer()
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .with_target(true);
 
-        let file_layer = fmt::layer()
-            .with_writer(non_blocking)
-            .with_ansi(false)
-            .with_target(true);
+    let filter_str = if console {
+        // In debug mode, show all debug-level logs.
+        "window_selector=debug"
+    } else {
+        "window_selector=info,warn,error"
+    };
 
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(filter_str));
+
+    if console {
         let stderr_layer = fmt::layer()
             .with_writer(std::io::stderr)
-            .with_ansi(false)
+            .with_ansi(true)
             .with_target(true);
-
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("window_selector=debug,info"));
 
         tracing_subscriber::registry()
             .with(filter)
             .with(file_layer)
             .with(stderr_layer)
             .init();
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
-        use tracing_subscriber::layer::SubscriberExt;
-        use tracing_subscriber::util::SubscriberInitExt;
-
-        let file_layer = fmt::layer()
-            .with_writer(non_blocking)
-            .with_ansi(false)
-            .with_target(true);
-
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("window_selector=info,warn,error"));
-
+    } else {
         tracing_subscriber::registry()
             .with(filter)
             .with(file_layer)
@@ -71,7 +62,6 @@ pub fn init_logging(logs_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
 
     #[test]

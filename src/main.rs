@@ -36,7 +36,12 @@ use window_enumerator::{register_overlay_hwnds, snapshot_windows};
 use window_switcher::{restore_focus, switch_to_window};
 
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, CreateFontW, CreateSolidBrush, EndPaint, FillRect, SelectObject,
+    SetBkMode, SetTextColor, HBRUSH, PAINTSTRUCT, TRANSPARENT,
+    DrawTextW, DT_CENTER, DT_SINGLELINE, DT_VCENTER,
+};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -89,6 +94,15 @@ fn set_app_state(ptr: *mut AppState) {
 }
 
 fn main() {
+    // Check for --debug flag: allocate a console window so logs are visible in real-time.
+    let debug_mode = std::env::args().any(|a| a == "--debug");
+    if debug_mode {
+        unsafe {
+            use windows::Win32::System::Console::AllocConsole;
+            let _ = AllocConsole();
+        }
+    }
+
     // Set per-monitor DPI awareness.
     unsafe {
         use windows::Win32::UI::HiDpi::{
@@ -108,11 +122,11 @@ fn main() {
 
     // Initialize logging.
     let logs_dir = config_dir.join("logs");
-    if let Err(e) = logging::init_logging(&logs_dir) {
+    if let Err(e) = logging::init_logging(&logs_dir, debug_mode) {
         eprintln!("Logging init failed: {}", e);
     }
 
-    tracing::info!("Window Selector starting up");
+    tracing::info!("Window Selector starting up (debug_mode={})", debug_mode);
 
     let config = match AppConfig::load(&config_dir) {
         Ok(c) => c,
@@ -214,8 +228,8 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
         tracing::error!("Overlay window creation failed: {:?}", e);
     }
 
-    // Register overlay HWNDs to be excluded from window enumeration.
-    let overlay_hwnds = (*app_state_ptr).overlay_manager.all_hwnds().to_vec();
+    // Register overlay HWNDs (including label overlay) to be excluded from window enumeration.
+    let overlay_hwnds = (*app_state_ptr).overlay_manager.all_hwnds_including_labels();
     register_overlay_hwnds(overlay_hwnds);
 
     // Add tray icon.
@@ -337,14 +351,101 @@ unsafe extern "system" fn overlay_wndproc(
 
         WM_PAINT => {
             let app_ptr = get_app_state();
-            if !app_ptr.is_null() {
-                let app = &mut *app_ptr;
-                // Render the overlay UI (letter labels, titles, selection border).
-                app.overlay_manager.render_frame();
-            } else {
-                // No app state yet — let DefWindowProcW validate the region.
+            if app_ptr.is_null() {
                 return DefWindowProcW(hwnd, msg, wparam, lparam);
             }
+            let app = &mut *app_ptr;
+
+            // Only paint the label overlay HWND (not the thumbnail overlay).
+            let is_label_hwnd = app.overlay_manager.label_hwnd == Some(hwnd);
+            tracing::debug!(
+                "WM_PAINT on {:?}, is_label_hwnd={}, state={:?}",
+                hwnd, is_label_hwnd, app.overlay_state
+            );
+            if !is_label_hwnd {
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+
+            let mut ps = PAINTSTRUCT::default();
+            let hdc = BeginPaint(hwnd, &mut ps);
+
+            if !matches!(app.overlay_state, OverlayState::Active { .. }) {
+                let _ = EndPaint(hwnd, &ps);
+                return LRESULT(0);
+            }
+
+            // Fill entire window with color-key color (RGB 1,1,1) → transparent.
+            let key_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00010101));
+            FillRect(hdc, &ps.rcPaint, key_brush);
+            let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
+
+            tracing::info!(
+                "Label WM_PAINT: painting badges, rcPaint=({},{},{},{})",
+                ps.rcPaint.left, ps.rcPaint.top, ps.rcPaint.right, ps.rcPaint.bottom
+            );
+
+            // Draw letter badge at bottom-right of each cell
+            if let Some(layout) = &app.overlay_manager.grid_layout {
+                let badge_w: i32 = 32;
+                let badge_h: i32 = 28;
+                let badge_margin: i32 = 12;
+
+                // Font sized to fit the badge height well
+                let font = CreateFontW(
+                    20, 0, 0, 0, 700, // height=20, bold
+                    0, 0, 0, 0, 0, 0, 0, 0,
+                    windows::core::w!("Consolas"),
+                );
+                let old_font = SelectObject(hdc, font);
+                SetBkMode(hdc, TRANSPARENT);
+
+                for (i, cell) in layout.cells.iter().enumerate() {
+                    if i >= app.window_snapshot.len() {
+                        break;
+                    }
+                    let win = &app.window_snapshot[i];
+                    let is_selected = app.overlay_manager.render_selected == Some(i);
+
+                    let badge_rect = RECT {
+                        left: (cell.x + cell.width) as i32 - badge_w - badge_margin,
+                        top: (cell.y + cell.height) as i32 - badge_h - badge_margin,
+                        right: (cell.x + cell.width) as i32 - badge_margin,
+                        bottom: (cell.y + cell.height) as i32 - badge_margin,
+                    };
+
+                    // COLORREF is 0x00BBGGRR
+                    let badge_brush = if is_selected {
+                        CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x000088FF)) // orange
+                    } else {
+                        CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00553322)) // dark blue-gray
+                    };
+                    FillRect(hdc, &badge_rect, badge_brush);
+                    let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_brush);
+
+                    if let Some(letter) = win.letter {
+                        let text_color = if is_selected {
+                            windows::Win32::Foundation::COLORREF(0x00FFFFFF) // white
+                        } else {
+                            windows::Win32::Foundation::COLORREF(0x00EEEEFF) // light
+                        };
+                        SetTextColor(hdc, text_color);
+                        let letter_upper = letter.to_uppercase().to_string();
+                        let mut wtext: Vec<u16> = letter_upper.encode_utf16().collect();
+                        let mut letter_rect = badge_rect;
+                        DrawTextW(
+                            hdc,
+                            &mut wtext,
+                            &mut letter_rect,
+                            DT_CENTER | DT_SINGLELINE | DT_VCENTER,
+                        );
+                    }
+                }
+
+                SelectObject(hdc, old_font);
+                let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
+            }
+
+            EndPaint(hwnd, &ps);
             LRESULT(0)
         }
 
@@ -354,9 +455,9 @@ unsafe extern "system" fn overlay_wndproc(
                 let app_ptr = get_app_state();
                 if !app_ptr.is_null() {
                     let app = &mut *app_ptr;
-                    if matches!(app.overlay_state, OverlayState::Active { .. } | OverlayState::FadingIn) {
+                    if matches!(app.overlay_state, OverlayState::Active { .. }) {
                         tracing::info!("Overlay lost focus → auto-dismiss");
-                        app.overlay_manager.begin_hide(&mut app.overlay_state, None);
+                        dismiss_overlay(app);
                     }
                 }
             }
@@ -368,7 +469,7 @@ unsafe extern "system" fn overlay_wndproc(
             if !app_ptr.is_null() {
                 let app = &mut *app_ptr;
                 if matches!(app.overlay_state, OverlayState::Active { .. }) {
-                    app.overlay_manager.begin_hide(&mut app.overlay_state, None);
+                    dismiss_overlay(app);
                 }
             }
             LRESULT(0)
@@ -394,12 +495,10 @@ unsafe fn handle_hotkey(app: &mut AppState) {
 
     match &app.overlay_state {
         OverlayState::Hidden => activate_overlay(app),
-        OverlayState::FadingIn | OverlayState::Active { .. } => {
-            app.overlay_manager.begin_hide(&mut app.overlay_state, None);
+        OverlayState::Active { .. } => {
+            dismiss_overlay(app);
         }
-        OverlayState::FadingOut { .. } => {
-            // Already dismissing — ignore double-press.
-        }
+        _ => {}
     }
 }
 
@@ -427,6 +526,15 @@ unsafe fn activate_overlay(app: &mut AppState) {
     // Activate the keyboard hook so key presses reach the overlay regardless
     // of whether SetForegroundWindow succeeded.
     keyboard_hook::set_active(true);
+}
+
+/// Dismiss the overlay without switching to any window; restore previous foreground.
+unsafe fn dismiss_overlay(app: &mut AppState) {
+    let prev = app.previous_foreground.take();
+    app.overlay_manager.begin_hide(&mut app.overlay_state, None);
+    if let Some(prev) = prev {
+        let _ = restore_focus(prev);
+    }
 }
 
 unsafe fn handle_tray_event(app: &mut AppState, hwnd: HWND, lparam: LPARAM) {
@@ -489,7 +597,7 @@ unsafe fn handle_overlay_key(vk_code: u32) {
             app.overlay_manager.begin_hide(&mut app.overlay_state, Some(target));
         }
         KeyAction::Dismiss => {
-            app.overlay_manager.begin_hide(&mut app.overlay_state, None);
+            dismiss_overlay(app);
         }
         KeyAction::TagAssigned => {
             let sel = app.overlay_state.selected_index();
@@ -506,9 +614,11 @@ unsafe fn handle_fade_timer(app: &mut AppState) {
         match app.overlay_state.clone() {
             OverlayState::FadingIn => {
                 app.overlay_state = OverlayState::Active { selected: None };
+                // Remove WS_EX_LAYERED so Direct2D HwndRenderTarget can paint.
+                app.overlay_manager.remove_layered_style();
                 // Render initial frame now that we are fully visible.
                 app.overlay_manager.render_frame();
-                tracing::debug!("Fade-in complete");
+                tracing::info!("Fade-in complete → Active");
             }
             OverlayState::FadingOut { switch_target } => {
                 app.overlay_manager.hide_windows();

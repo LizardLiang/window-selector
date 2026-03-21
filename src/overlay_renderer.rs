@@ -24,17 +24,19 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
 // Logical size constants (scaled by DPI at render time)
-const LABEL_FONT_SIZE: f32 = 42.0;    // pt — larger for legibility
-const TITLE_FONT_SIZE: f32 = 11.0;    // pt
+const LABEL_FONT_SIZE: f32 = 72.0;    // pt — DEBUG: extra large for visibility testing
+const TITLE_FONT_SIZE: f32 = 14.0;    // pt
 const BADGE_FONT_SIZE: f32 = 13.0;    // pt
 const CELL_CORNER_RADIUS: f32 = 6.0;
-const LABEL_PILL_CORNER_RADIUS: f32 = 10.0;
+const LABEL_PILL_CORNER_RADIUS: f32 = 14.0;
 const SELECTION_BORDER_WIDTH: f32 = 3.0;
-const LABEL_STRIP_HEIGHT: f32 = 70.0; // Height of the label area at the bottom of each cell
+/// Height reserved at the bottom of each cell for the letter label.
+/// Must match `LABEL_STRIP_HEIGHT` in `dwm_thumbnails.rs`.
+const LABEL_STRIP_HEIGHT: f32 = 120.0;
 const BADGE_SIZE: f32 = 24.0;         // Badge pill size
-// Pill dimensions — large enough for the font at typical DPI
-const LABEL_PILL_W: f32 = 60.0;
-const LABEL_PILL_H: f32 = 52.0;
+// Pill dimensions — large enough for the jumbo font
+const LABEL_PILL_W: f32 = 100.0;
+const LABEL_PILL_H: f32 = 96.0;
 
 /// The Direct2D + DirectWrite rendering context for an overlay window.
 #[allow(dead_code)]
@@ -233,6 +235,11 @@ impl OverlayRenderer {
         area_width: f32,
         area_height: f32,
     ) {
+        tracing::info!(
+            "render() called: {} windows, {} cells, selected={:?}, area={}x{}, dpi={}",
+            windows.len(), cells.len(), selected, area_width, area_height, self.dpi_scale
+        );
+
         unsafe {
             self.render_target.BeginDraw();
 
@@ -245,6 +252,7 @@ impl OverlayRenderer {
                 .FillRectangle(&full_rect, &self.backdrop_brush);
 
             if windows.is_empty() {
+                tracing::info!("render(): no windows, drawing empty state");
                 self.draw_empty_state(area_width, area_height);
             } else {
                 // Draw cells
@@ -262,6 +270,13 @@ impl OverlayRenderer {
                         *cell
                     };
 
+                    tracing::debug!(
+                        "render cell[{}]: letter={:?}, title='{}', pos=({:.0},{:.0}), size=({:.0}x{:.0}), selected={}",
+                        i, window.letter, window.title,
+                        effective_cell.x, effective_cell.y,
+                        effective_cell.width, effective_cell.height,
+                        is_selected
+                    );
                     self.draw_cell(&effective_cell, window, is_selected);
                 }
             }
@@ -269,6 +284,8 @@ impl OverlayRenderer {
             // EndDraw — handle device lost
             if let Err(e) = self.render_target.EndDraw(None, None) {
                 tracing::error!("Direct2D EndDraw failed (device may be lost): {:?}", e);
+            } else {
+                tracing::debug!("render(): EndDraw succeeded");
             }
         }
     }

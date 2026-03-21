@@ -30,9 +30,16 @@ impl Drop for ThumbnailHandle {
     }
 }
 
+/// No reservation — thumbnails fill the full cell. Labels are drawn
+/// on a separate overlay window that sits above this one.
+const LABEL_STRIP_HEIGHT: f32 = 0.0;
+
 /// Register DWM thumbnails for all windows in the snapshot.
 /// Returns a Vec of ThumbnailHandle, one per window.
 /// Windows with blank thumbnails (e.g., minimized) are marked is_blank=true.
+///
+/// Thumbnails are placed in the upper portion of each cell, leaving the bottom
+/// `LABEL_STRIP_HEIGHT` pixels free for the letter label rendered by Direct2D.
 pub fn register_thumbnails(
     destination_hwnd: HWND,
     windows: &[WindowInfo],
@@ -71,8 +78,14 @@ pub fn register_thumbnails(
             let is_blank = source_size.cx == 0 && source_size.cy == 0;
 
             if !is_blank {
-                // Set thumbnail destination to the cell rect
-                let dest_rect = cell_to_rect(cell);
+                // Reserve the bottom of the cell for the letter label strip.
+                let thumb_cell = thumbnail_dest_rect(cell, LABEL_STRIP_HEIGHT);
+                let dest_rect = cell_to_rect(&thumb_cell);
+                tracing::debug!(
+                    "Thumbnail[{}] dest=({},{},{},{}) label_strip={}",
+                    i, dest_rect.left, dest_rect.top, dest_rect.right, dest_rect.bottom,
+                    LABEL_STRIP_HEIGHT
+                );
                 let props = DWM_THUMBNAIL_PROPERTIES {
                     dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY,
                     rcDestination: dest_rect,
