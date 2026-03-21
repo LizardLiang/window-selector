@@ -29,6 +29,9 @@ struct EnumContext {
 
 /// Enumerate all Alt+Tab-visible windows and return a snapshot.
 /// Applies the heuristic filter matching Windows Alt+Tab behavior.
+// SAFETY: OVERLAY_HWNDS is only written once at startup (register_overlay_hwnds), and only
+// read afterwards. This is a single-threaded Win32 app — no concurrent access is possible.
+#[allow(static_mut_refs)]
 pub fn enumerate_windows(
     own_hwnds: &[HWND],
     monitors: &[crate::monitor::MonitorInfo],
@@ -41,7 +44,7 @@ pub fn enumerate_windows(
     let ctx_ptr = &mut ctx as *mut EnumContext;
 
     unsafe {
-        EnumWindows(
+        let _ = EnumWindows(
             Some(enum_windows_callback),
             LPARAM(ctx_ptr as isize),
         );
@@ -159,6 +162,7 @@ pub fn snapshot_windows(
 
 /// Check whether the given window would pass the Alt+Tab filter.
 /// Used for unit testing the filter logic with mock data.
+#[allow(dead_code)]
 pub fn passes_alt_tab_filter_mock(
     visible: bool,
     title_len: usize,

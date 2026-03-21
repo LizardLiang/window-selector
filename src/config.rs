@@ -50,6 +50,7 @@ impl AppConfig {
     }
 
     /// Save config to the given directory atomically (write to temp then rename).
+    #[allow(dead_code)]
     pub fn save(config_dir: &Path, config: &AppConfig) -> std::io::Result<()> {
         let config_path = config_dir.join("config.toml");
         Self::save_to_path(config, &config_path)

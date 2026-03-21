@@ -12,6 +12,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::VK_0;
 
 /// Result of processing a WM_HOTKEY event.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum HotkeyAction {
     /// Overlay should be activated (was Hidden).
     Activate,
@@ -23,6 +24,7 @@ pub enum HotkeyAction {
 
 /// Handle a WM_HOTKEY event (activation shortcut re-pressed).
 /// Returns the action to take based on current overlay state.
+#[allow(dead_code)]
 pub fn handle_hotkey_event(state: &OverlayState) -> HotkeyAction {
     match state {
         OverlayState::Hidden => HotkeyAction::Activate,
@@ -33,6 +35,7 @@ pub fn handle_hotkey_event(state: &OverlayState) -> HotkeyAction {
 
 /// Handle a WM_ACTIVATE WA_INACTIVE event (overlay lost focus, e.g. alt-tab).
 /// Returns true if the overlay should be dismissed.
+#[allow(dead_code)]
 pub fn handle_focus_lost(state: &OverlayState) -> bool {
     matches!(state, OverlayState::Active { .. } | OverlayState::FadingIn)
 }

@@ -24,6 +24,7 @@ impl AccentColor {
     }
 
     /// Create an RGBA tuple suitable for Direct2D (alpha as last component).
+    #[allow(dead_code)]
     pub fn to_d2d_color(&self, alpha: f32) -> (f32, f32, f32, f32) {
         (self.r, self.g, self.b, alpha)
     }

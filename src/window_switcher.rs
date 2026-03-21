@@ -45,7 +45,7 @@ pub fn switch_to_window(hwnd: HWND) -> windows::core::Result<()> {
     unsafe {
         // Restore if minimized
         if IsIconic(hwnd).as_bool() {
-            ShowWindow(hwnd, SW_RESTORE);
+            let _ = ShowWindow(hwnd, SW_RESTORE);
         }
 
         // Attempt 1: AllowSetForegroundWindow + SetForegroundWindow

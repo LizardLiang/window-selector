@@ -2,6 +2,7 @@ use windows::Win32::Foundation::HWND;
 
 /// Snapshot of a single window at overlay activation time.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct WindowInfo {
     pub hwnd: HWND,
     pub title: String,

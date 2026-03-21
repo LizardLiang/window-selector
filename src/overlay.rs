@@ -223,7 +223,7 @@ impl OverlayManager {
                     0,
                     LWA_ALPHA,
                 );
-                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             }
 
             // Start fade-in timer on primary HWND.
@@ -282,7 +282,7 @@ impl OverlayManager {
 
         if !still_running {
             if let Some(&hwnd) = self.overlay_hwnds.first() {
-                unsafe { KillTimer(hwnd, FADE_TIMER_ID); }
+                unsafe { let _ = KillTimer(hwnd, FADE_TIMER_ID); }
             }
             true
         } else {
@@ -298,7 +298,7 @@ impl OverlayManager {
 
         unsafe {
             for &hwnd in &self.overlay_hwnds {
-                ShowWindow(hwnd, SW_HIDE);
+                let _ = ShowWindow(hwnd, SW_HIDE);
             }
         }
         tracing::info!("Overlay hidden");
@@ -329,11 +329,12 @@ impl OverlayManager {
         // continuous stream of WM_PAINT messages from DefWindowProcW).
         if let Some(&hwnd) = self.overlay_hwnds.first() {
             unsafe {
-                windows::Win32::Graphics::Gdi::ValidateRect(hwnd, None);
+                let _ = windows::Win32::Graphics::Gdi::ValidateRect(hwnd, None);
             }
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_primary_hwnd(&self) -> Option<HWND> {
         self.overlay_hwnds.first().copied()
     }

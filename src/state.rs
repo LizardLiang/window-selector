@@ -22,10 +22,12 @@ pub enum OverlayState {
 }
 
 impl OverlayState {
+    #[allow(dead_code)]
     pub fn is_visible(&self) -> bool {
         !matches!(self, OverlayState::Hidden)
     }
 
+    #[allow(dead_code)]
     pub fn is_active(&self) -> bool {
         matches!(self, OverlayState::Active { .. })
     }
@@ -81,6 +83,7 @@ impl SessionTags {
     }
 
     /// Return all current tag assignments as a sorted Vec.
+    #[allow(dead_code)]
     pub fn all_tags(&self) -> Vec<(u8, HWND)> {
         let mut result: Vec<(u8, HWND)> = self.tags.iter().map(|(&n, &h)| (n, h)).collect();
         result.sort_by_key(|(n, _)| *n);

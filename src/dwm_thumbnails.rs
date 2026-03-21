@@ -8,6 +8,7 @@ use windows::Win32::Graphics::Dwm::{
 };
 
 /// A registered DWM thumbnail with its source window and destination cell.
+#[allow(dead_code)]
 pub struct ThumbnailHandle {
     pub thumbnail_id: isize,
     pub source_hwnd: HWND,
@@ -104,6 +105,7 @@ pub fn register_thumbnails(
 }
 
 /// Update thumbnail destination rects (e.g., on selection change causing scale-up).
+#[allow(dead_code)]
 pub fn update_thumbnail_dest(
     handle: &ThumbnailHandle,
     cell: &CellRect,
@@ -130,6 +132,7 @@ pub fn update_thumbnail_dest(
 }
 
 /// Hide a specific thumbnail (used during fade-out or for blank thumbnails).
+#[allow(dead_code)]
 pub fn hide_thumbnail(handle: &ThumbnailHandle) {
     if handle.thumbnail_id == 0 {
         return;
@@ -158,6 +161,7 @@ fn cell_to_rect(cell: &CellRect) -> RECT {
 
 /// Compute the thumbnail destination rect with label area reserved at bottom.
 /// The thumbnail occupies the top portion; the bottom strip is for labels.
+#[allow(dead_code)]
 pub fn thumbnail_dest_rect(cell: &CellRect, label_strip_height: f32) -> CellRect {
     CellRect {
         x: cell.x,

@@ -29,6 +29,7 @@ impl CellRect {
 
 /// Result of the grid layout computation.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct GridLayout {
     pub cells: Vec<CellRect>,
     pub cols: usize,

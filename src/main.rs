@@ -52,6 +52,7 @@ const MSG_WINDOW_CLASS: &str = "WindowSelectorMsgWnd\0";
 const MSG_WINDOW_NAME: &str = "Window Selector\0";
 
 /// Application state owned by the single message pump thread.
+#[allow(dead_code)]
 struct AppState {
     config: AppConfig,
     config_dir: std::path::PathBuf,
@@ -254,7 +255,7 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
         if r.0 <= 0 {
             break;
         }
-        TranslateMessage(&msg);
+        let _ = TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
 
@@ -447,7 +448,7 @@ unsafe fn handle_menu_command(app: &mut AppState, hwnd: HWND, cmd: u32) {
         }
         MENU_EXIT => {
             tracing::info!("Exit selected from tray menu");
-            DestroyWindow(hwnd);
+            let _ = DestroyWindow(hwnd);
         }
         _ => {}
     }

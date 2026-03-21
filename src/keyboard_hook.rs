@@ -79,6 +79,7 @@ pub fn set_active(active: bool) {
 }
 
 /// Returns whether the hook is currently consuming keystrokes.
+#[allow(dead_code)]
 pub fn is_active() -> bool {
     HOOK_ACTIVE.load(Ordering::Relaxed)
 }

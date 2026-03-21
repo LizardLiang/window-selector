@@ -9,6 +9,7 @@ pub const ALPHA_MIN: u8 = 0;
 /// Timer interval in milliseconds (~60fps).
 pub const FADE_TIMER_INTERVAL_MS: u32 = 16;
 /// Fade duration in milliseconds.
+#[allow(dead_code)]
 pub const FADE_DURATION_MS: u32 = 80;
 /// Alpha delta per timer tick.
 /// 220 / (80ms / 16ms) = 220 / 5 = 44
@@ -79,6 +80,7 @@ impl FadeAnimator {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_animating(&self) -> bool {
         self.direction.is_some()
     }

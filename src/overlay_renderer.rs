@@ -37,6 +37,7 @@ const LABEL_PILL_W: f32 = 60.0;
 const LABEL_PILL_H: f32 = 52.0;
 
 /// The Direct2D + DirectWrite rendering context for an overlay window.
+#[allow(dead_code)]
 pub struct OverlayRenderer {
     pub d2d_factory: ID2D1Factory,
     pub dwrite_factory: IDWriteFactory,
@@ -77,7 +78,7 @@ impl OverlayRenderer {
 
             // Get client rect
             let mut client_rect = RECT::default();
-            GetClientRect(hwnd, &mut client_rect);
+            let _ = GetClientRect(hwnd, &mut client_rect);
             let width = (client_rect.right - client_rect.left) as u32;
             let height = (client_rect.bottom - client_rect.top) as u32;
 
@@ -198,10 +199,11 @@ impl OverlayRenderer {
     }
 
     /// Recreate the render target after device loss.
+    #[allow(dead_code)]
     pub fn recreate_render_target(&mut self, hwnd: HWND) -> windows::core::Result<()> {
         unsafe {
             let mut client_rect = RECT::default();
-            GetClientRect(hwnd, &mut client_rect);
+            let _ = GetClientRect(hwnd, &mut client_rect);
             let width = (client_rect.right - client_rect.left) as u32;
             let height = (client_rect.bottom - client_rect.top) as u32;
 
@@ -407,6 +409,7 @@ impl OverlayRenderer {
     }
 
     /// Resize the render target to match a new window size.
+    #[allow(dead_code)]
     pub fn resize(&self, width: u32, height: u32) {
         unsafe {
             let _ = self.render_target.Resize(&D2D_SIZE_U { width, height });

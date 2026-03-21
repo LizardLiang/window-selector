@@ -76,6 +76,7 @@ impl MruTracker {
     }
 
     /// Get the current MRU order.
+    #[allow(dead_code)]
     pub fn get_order(&self) -> &[HWND] {
         &self.order
     }

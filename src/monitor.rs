@@ -7,6 +7,7 @@ use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 
 /// Physical monitor descriptor.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MonitorInfo {
     pub handle: HMONITOR,
     pub rect: RECT,       // Screen coordinates (physical pixels)
@@ -21,7 +22,7 @@ pub fn get_all_monitors() -> Vec<MonitorInfo> {
     let monitors_ptr = &mut monitors as *mut Vec<MonitorInfo>;
 
     unsafe {
-        EnumDisplayMonitors(
+        let _ = EnumDisplayMonitors(
             HDC(std::ptr::null_mut()),
             None,
             Some(enum_monitor_callback),
