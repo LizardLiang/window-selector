@@ -1,3 +1,6 @@
+/// Height reserved at the bottom of the overlay for the quick list bar (logical pixels).
+pub const QUICK_LIST_BAR_HEIGHT: f32 = 36.0;
+
 /// A grid cell's position and size within the overlay, in logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CellRect {

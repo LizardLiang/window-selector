@@ -2,7 +2,7 @@ use crate::accent_color::get_accent_color;
 use crate::animation::{FadeAnimator, FADE_TIMER_ID};
 use crate::dwm_thumbnails::{self, ThumbnailHandle};
 use crate::grid_layout::CellRect;
-use crate::grid_layout::{compute_grid, GridLayout};
+use crate::grid_layout::{compute_grid, GridLayout, QUICK_LIST_BAR_HEIGHT};
 use crate::monitor::MonitorInfo;
 use crate::overlay_renderer::OverlayRenderer;
 use crate::state::OverlayState;
@@ -247,7 +247,9 @@ impl OverlayManager {
         self.area_width = w;
         self.area_height = h;
 
-        let grid = compute_grid(windows.len(), w, h);
+        // Reserve space at the bottom for the quick list bar.
+        let grid_height = h - QUICK_LIST_BAR_HEIGHT;
+        let grid = compute_grid(windows.len(), w, grid_height);
 
         // Register DWM thumbnails on the primary overlay HWND.
         let reg = dwm_thumbnails::register_thumbnails(

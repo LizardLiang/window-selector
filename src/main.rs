@@ -425,7 +425,7 @@ unsafe extern "system" fn overlay_wndproc(
                         windows::Win32::Foundation::COLORREF(0x00221100),
                     );
                     let old_glow = SelectObject(hdc, glow_brush);
-                    RoundRect(
+                    let _ = RoundRect(
                         hdc,
                         badge_rect.left - glow_expand,
                         badge_rect.top - glow_expand,
@@ -444,7 +444,7 @@ unsafe extern "system" fn overlay_wndproc(
                         CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00CC6600))
                     };
                     let old_badge = SelectObject(hdc, badge_brush);
-                    RoundRect(
+                    let _ = RoundRect(
                         hdc,
                         badge_rect.left,
                         badge_rect.top,
@@ -477,7 +477,7 @@ unsafe extern "system" fn overlay_wndproc(
                             windows::Win32::Foundation::COLORREF(0x0018BFF0), // amber
                         );
                         let old_tag = SelectObject(hdc, tag_brush);
-                        RoundRect(
+                        let _ = RoundRect(
                             hdc,
                             (tb.x + tb.width) as i32 - tag_sz - tag_margin,
                             tb.y as i32 + tag_margin,
@@ -674,6 +674,10 @@ unsafe fn handle_overlay_key(vk_code: u32) {
             dismiss_overlay(app);
         }
         KeyAction::TagAssigned => {
+            // Refresh number_tag fields from session_tags so the quick list updates
+            for w in &mut app.window_snapshot {
+                w.number_tag = app.session_tags.get_tag_for_hwnd(w.hwnd);
+            }
             let sel = app.overlay_state.selected_index();
             let snap = app.window_snapshot.clone();
             app.overlay_manager.redraw(&snap, sel);
