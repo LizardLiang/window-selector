@@ -81,26 +81,22 @@ pub fn handle_key_down(
 
     // Number keys (1-9)
     if let Some(num) = vk_to_digit(vk_code) {
-        tracing::debug!("Number key {} pressed, ctrl_held={}", num, ctrl_held);
         if ctrl_held {
             // Ctrl+Number: assign tag to selected window
             if let OverlayState::Active { selected: Some(idx) } = state {
                 if let Some(window) = windows.get(*idx) {
                     // Clear any previous holder of this tag
                     tags.assign(num, window.hwnd);
-                    tracing::debug!("Tag {} assigned to HWND {:?} ({})", num, window.hwnd, window.title);
+                    tracing::info!("Tag {} assigned to {:?}", num, window.hwnd);
                     return KeyAction::TagAssigned;
                 }
             }
         } else {
             // Number key alone: switch to tagged window
             if let Some(tagged_hwnd) = tags.get(num) {
-                // Verify window is still valid
                 if unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(tagged_hwnd).as_bool() } {
-                    tracing::info!("Switching to tagged window {} (HWND {:?})", num, tagged_hwnd);
                     return KeyAction::SwitchTo(tagged_hwnd);
                 } else {
-                    tracing::debug!("Tagged window {} no longer exists; releasing tag", num);
                     tags.remove_by_hwnd(tagged_hwnd);
                 }
             }
@@ -111,7 +107,6 @@ pub fn handle_key_down(
     // Letter keys (a-z) — select a window
     if let Some(letter) = vk_to_letter(vk_code) {
         if let Some(idx) = crate::letter_assignment::find_by_letter(windows, letter) {
-            tracing::debug!("Letter '{}' pressed -> selecting window index {}", letter, idx);
             return KeyAction::Select(idx);
         }
         // Unassigned letter: no-op
@@ -122,7 +117,6 @@ pub fn handle_key_down(
     if vk_code == VK_RETURN.0 as u32 || vk_code == VK_SPACE.0 as u32 {
         if let OverlayState::Active { selected: Some(idx) } = state {
             if let Some(window) = windows.get(*idx) {
-                tracing::info!("Confirm switch to HWND {:?} ({})", window.hwnd, window.title);
                 return KeyAction::SwitchTo(window.hwnd);
             }
         }
@@ -131,7 +125,6 @@ pub fn handle_key_down(
 
     // Escape: dismiss overlay
     if vk_code == VK_ESCAPE.0 as u32 {
-        tracing::debug!("Escape pressed -> dismissing overlay");
         return KeyAction::Dismiss;
     }
 

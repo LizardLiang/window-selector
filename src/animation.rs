@@ -7,6 +7,7 @@ pub const ALPHA_MAX: u8 = 220;
 /// Starting alpha (transparent).
 pub const ALPHA_MIN: u8 = 0;
 /// Timer interval in milliseconds (~60fps).
+#[allow(dead_code)]
 pub const FADE_TIMER_INTERVAL_MS: u32 = 16;
 /// Fade duration in milliseconds.
 #[allow(dead_code)]
@@ -19,6 +20,7 @@ pub const FADE_TIMER_ID: usize = 1001;
 
 /// Direction of the current fade animation.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub enum FadeDirection {
     In,
     Out,
@@ -40,12 +42,14 @@ impl FadeAnimator {
     }
 
     /// Start a fade-in animation.
+    #[allow(dead_code)]
     pub fn start_fade_in(&mut self) {
         self.current_alpha = ALPHA_MIN;
         self.direction = Some(FadeDirection::In);
     }
 
     /// Start a fade-out animation.
+    #[allow(dead_code)]
     pub fn start_fade_out(&mut self) {
         self.current_alpha = ALPHA_MAX;
         self.direction = Some(FadeDirection::Out);

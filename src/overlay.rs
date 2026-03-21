@@ -1,5 +1,5 @@
 use crate::accent_color::get_accent_color;
-use crate::animation::{FadeAnimator, FADE_TIMER_ID, FADE_TIMER_INTERVAL_MS};
+use crate::animation::{FadeAnimator, FADE_TIMER_ID};
 use crate::dwm_thumbnails::{self, ThumbnailHandle};
 use crate::grid_layout::{compute_grid, GridLayout};
 use crate::monitor::MonitorInfo;
@@ -9,11 +9,10 @@ use crate::window_info::WindowInfo;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, KillTimer, RegisterClassExW,
-    SetForegroundWindow, SetLayeredWindowAttributes, SetTimer, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, HMENU,
-    GWL_EXSTYLE, LWA_ALPHA, LWA_COLORKEY, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
+    CreateWindowExW, DefWindowProcW, KillTimer, RegisterClassExW,
+    SetForegroundWindow, SetLayeredWindowAttributes, SetWindowPos,
+    ShowWindow, HMENU, LWA_ALPHA, LWA_COLORKEY, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE,
     WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT, WS_POPUP, CS_HREDRAW, CS_VREDRAW,
 };
@@ -386,14 +385,7 @@ impl OverlayManager {
     }
 
     /// Render the current frame immediately using Direct2D.
-    /// Called from `redraw()` and from the `WM_PAINT` handler.
     pub fn render_frame(&self) {
-        let has_renderer = self.renderer.is_some();
-        let has_layout = self.grid_layout.is_some();
-        tracing::debug!(
-            "render_frame(): renderer={}, layout={}, snapshot={} windows, selected={:?}",
-            has_renderer, has_layout, self.render_snapshot.len(), self.render_selected
-        );
         if let Some(renderer) = &self.renderer {
             if let Some(layout) = &self.grid_layout {
                 renderer.render(
@@ -403,56 +395,14 @@ impl OverlayManager {
                     self.area_width,
                     self.area_height,
                 );
-            } else {
-                tracing::warn!("render_frame(): no grid_layout — skipping render");
             }
-        } else {
-            tracing::warn!("render_frame(): no renderer — skipping render");
         }
-        // Also invalidate so WM_PAINT is properly acknowledged (prevents a
-        // continuous stream of WM_PAINT messages from DefWindowProcW).
+        // ValidateRect acknowledges WM_PAINT (prevents a continuous stream of
+        // WM_PAINT messages from DefWindowProcW).
         if let Some(&hwnd) = self.overlay_hwnds.first() {
             unsafe {
                 let _ = windows::Win32::Graphics::Gdi::ValidateRect(hwnd, None);
             }
-        }
-    }
-
-    /// Remove `WS_EX_LAYERED` from all overlay windows so that Direct2D
-    /// `HwndRenderTarget` content becomes visible. Called when fade-in completes.
-    pub fn remove_layered_style(&self) {
-        unsafe {
-            for &hwnd in &self.overlay_hwnds {
-                let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-                let new_style = ex_style & !(WS_EX_LAYERED.0 as isize);
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
-                // Apply the style change and force a full repaint.
-                let _ = SetWindowPos(
-                    hwnd, None, 0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-                );
-                let _ = InvalidateRect(hwnd, None, true);
-            }
-            tracing::info!("Removed WS_EX_LAYERED from overlay windows");
-        }
-    }
-
-    /// Re-add `WS_EX_LAYERED` to all overlay windows and set the starting alpha.
-    /// Called before starting fade-out.
-    pub fn add_layered_style(&self, alpha: u8) {
-        unsafe {
-            for &hwnd in &self.overlay_hwnds {
-                let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-                let new_style = ex_style | (WS_EX_LAYERED.0 as isize);
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
-                let _ = SetLayeredWindowAttributes(
-                    hwnd,
-                    windows::Win32::Foundation::COLORREF(0),
-                    alpha,
-                    LWA_ALPHA,
-                );
-            }
-            tracing::info!("Re-added WS_EX_LAYERED (alpha={}) for fade-out", alpha);
         }
     }
 

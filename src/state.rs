@@ -4,6 +4,7 @@ use windows::Win32::UI::WindowsAndMessaging::IsWindow;
 
 /// The overlay interaction state machine.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum OverlayState {
     /// Overlay is hidden; app is idle in the tray.
     Hidden,

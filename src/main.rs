@@ -39,7 +39,7 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreateSolidBrush, EndPaint, FillRect, SelectObject,
-    SetBkMode, SetTextColor, HBRUSH, PAINTSTRUCT, TRANSPARENT,
+    SetBkMode, SetTextColor, PAINTSTRUCT, TRANSPARENT,
     DrawTextW, DT_CENTER, DT_SINGLELINE, DT_VCENTER,
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -357,12 +357,7 @@ unsafe extern "system" fn overlay_wndproc(
             let app = &mut *app_ptr;
 
             // Only paint the label overlay HWND (not the thumbnail overlay).
-            let is_label_hwnd = app.overlay_manager.label_hwnd == Some(hwnd);
-            tracing::debug!(
-                "WM_PAINT on {:?}, is_label_hwnd={}, state={:?}",
-                hwnd, is_label_hwnd, app.overlay_state
-            );
-            if !is_label_hwnd {
+            if app.overlay_manager.label_hwnd != Some(hwnd) {
                 return DefWindowProcW(hwnd, msg, wparam, lparam);
             }
 
@@ -379,12 +374,7 @@ unsafe extern "system" fn overlay_wndproc(
             FillRect(hdc, &ps.rcPaint, key_brush);
             let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
 
-            tracing::info!(
-                "Label WM_PAINT: painting badges, rcPaint=({},{},{},{})",
-                ps.rcPaint.left, ps.rcPaint.top, ps.rcPaint.right, ps.rcPaint.bottom
-            );
-
-            // Draw letter badge at bottom-right of each cell
+            // Draw letter badge at bottom-right of each cell.
             if let Some(layout) = &app.overlay_manager.grid_layout {
                 let badge_w: i32 = 32;
                 let badge_h: i32 = 28;
@@ -445,7 +435,7 @@ unsafe extern "system" fn overlay_wndproc(
                 let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
             }
 
-            EndPaint(hwnd, &ps);
+            let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
 
@@ -567,7 +557,6 @@ unsafe fn handle_menu_command(app: &mut AppState, hwnd: HWND, cmd: u32) {
 /// overlay is active. Dispatches to `handle_overlay_key` and returns true to
 /// swallow the keystroke (prevent it from reaching the application below).
 fn keyboard_hook_handler(vk_code: u32) -> bool {
-    tracing::debug!("Hook: vk=0x{:02X} ({})", vk_code, vk_code);
     unsafe { handle_overlay_key(vk_code) };
 
     // Don't swallow modifier keys — let them pass through so
@@ -622,17 +611,13 @@ unsafe fn handle_fade_timer(app: &mut AppState) {
         match app.overlay_state.clone() {
             OverlayState::FadingIn => {
                 app.overlay_state = OverlayState::Active { selected: None };
-                // Remove WS_EX_LAYERED so Direct2D HwndRenderTarget can paint.
-                app.overlay_manager.remove_layered_style();
-                // Render initial frame now that we are fully visible.
                 app.overlay_manager.render_frame();
-                tracing::info!("Fade-in complete → Active");
+                tracing::info!("Fade-in complete");
             }
             OverlayState::FadingOut { switch_target } => {
                 app.overlay_manager.hide_windows();
                 app.overlay_state = OverlayState::Hidden;
 
-                // Deactivate keyboard hook before switching focus.
                 keyboard_hook::set_active(false);
 
                 if let Some(target) = switch_target {

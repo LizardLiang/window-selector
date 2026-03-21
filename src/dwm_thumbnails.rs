@@ -78,14 +78,8 @@ pub fn register_thumbnails(
             let is_blank = source_size.cx == 0 && source_size.cy == 0;
 
             if !is_blank {
-                // Reserve the bottom of the cell for the letter label strip.
                 let thumb_cell = thumbnail_dest_rect(cell, LABEL_STRIP_HEIGHT);
                 let dest_rect = cell_to_rect(&thumb_cell);
-                tracing::debug!(
-                    "Thumbnail[{}] dest=({},{},{},{}) label_strip={}",
-                    i, dest_rect.left, dest_rect.top, dest_rect.right, dest_rect.bottom,
-                    LABEL_STRIP_HEIGHT
-                );
                 let props = DWM_THUMBNAIL_PROPERTIES {
                     dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY,
                     rcDestination: dest_rect,

@@ -24,7 +24,7 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
 // Logical size constants (scaled by DPI at render time)
-const LABEL_FONT_SIZE: f32 = 72.0;    // pt — DEBUG: extra large for visibility testing
+const LABEL_FONT_SIZE: f32 = 72.0;    // pt
 const TITLE_FONT_SIZE: f32 = 14.0;    // pt
 const BADGE_FONT_SIZE: f32 = 13.0;    // pt
 const CELL_CORNER_RADIUS: f32 = 6.0;
@@ -235,11 +235,6 @@ impl OverlayRenderer {
         area_width: f32,
         area_height: f32,
     ) {
-        tracing::info!(
-            "render() called: {} windows, {} cells, selected={:?}, area={}x{}, dpi={}",
-            windows.len(), cells.len(), selected, area_width, area_height, self.dpi_scale
-        );
-
         unsafe {
             self.render_target.BeginDraw();
 
@@ -252,40 +247,25 @@ impl OverlayRenderer {
                 .FillRectangle(&full_rect, &self.backdrop_brush);
 
             if windows.is_empty() {
-                tracing::info!("render(): no windows, drawing empty state");
                 self.draw_empty_state(area_width, area_height);
             } else {
-                // Draw cells
                 for (i, window) in windows.iter().enumerate() {
                     if i >= cells.len() {
                         break;
                     }
                     let cell = &cells[i];
                     let is_selected = selected == Some(i);
-
-                    // Scale up selected cell
                     let effective_cell = if is_selected {
                         cell.scaled(1.05)
                     } else {
                         *cell
                     };
-
-                    tracing::debug!(
-                        "render cell[{}]: letter={:?}, title='{}', pos=({:.0},{:.0}), size=({:.0}x{:.0}), selected={}",
-                        i, window.letter, window.title,
-                        effective_cell.x, effective_cell.y,
-                        effective_cell.width, effective_cell.height,
-                        is_selected
-                    );
                     self.draw_cell(&effective_cell, window, is_selected);
                 }
             }
 
-            // EndDraw — handle device lost
             if let Err(e) = self.render_target.EndDraw(None, None) {
-                tracing::error!("Direct2D EndDraw failed (device may be lost): {:?}", e);
-            } else {
-                tracing::debug!("render(): EndDraw succeeded");
+                tracing::error!("Direct2D EndDraw failed (device lost): {:?}", e);
             }
         }
     }
