@@ -374,17 +374,18 @@ unsafe extern "system" fn overlay_wndproc(
             FillRect(hdc, &ps.rcPaint, key_brush);
             let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
 
-            // Draw letter badge at bottom-right of each cell.
+            // Draw letter badges and number tags, positioned on the actual thumbnail bounds.
             if let Some(layout) = &app.overlay_manager.grid_layout {
-                let badge_w: i32 = 32;
-                let badge_h: i32 = 28;
-                let badge_margin: i32 = 12;
+                let thumb_bounds = &app.overlay_manager.thumbnail_bounds;
+                let badge_w: i32 = 36;
+                let badge_h: i32 = 30;
+                let badge_margin: i32 = 8;
 
-                // Font sized to fit the badge height well
+                // Letter badge font — Segoe UI Bold, large
                 let font = CreateFontW(
-                    20, 0, 0, 0, 700, // height=20, bold
+                    22, 0, 0, 0, 700, // height=22, bold
                     0, 0, 0, 0, 0, 0, 0, 0,
-                    windows::core::w!("Consolas"),
+                    windows::core::w!("Segoe UI"),
                 );
                 let old_font = SelectObject(hdc, font);
                 SetBkMode(hdc, TRANSPARENT);
@@ -396,29 +397,32 @@ unsafe extern "system" fn overlay_wndproc(
                     let win = &app.window_snapshot[i];
                     let is_selected = app.overlay_manager.render_selected == Some(i);
 
-                    let badge_rect = RECT {
-                        left: (cell.x + cell.width) as i32 - badge_w - badge_margin,
-                        top: (cell.y + cell.height) as i32 - badge_h - badge_margin,
-                        right: (cell.x + cell.width) as i32 - badge_margin,
-                        bottom: (cell.y + cell.height) as i32 - badge_margin,
+                    // Use actual thumbnail bounds if available, fall back to cell
+                    let tb = if i < thumb_bounds.len() {
+                        &thumb_bounds[i]
+                    } else {
+                        cell
                     };
 
-                    // COLORREF is 0x00BBGGRR
+                    // Letter badge — bottom-right of the actual thumbnail
+                    let badge_rect = RECT {
+                        left: (tb.x + tb.width) as i32 - badge_w - badge_margin,
+                        top: (tb.y + tb.height) as i32 - badge_h - badge_margin,
+                        right: (tb.x + tb.width) as i32 - badge_margin,
+                        bottom: (tb.y + tb.height) as i32 - badge_margin,
+                    };
+
+                    // COLORREF is 0x00BBGGRR — high-visibility colors
                     let badge_brush = if is_selected {
-                        CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x000088FF)) // orange
+                        CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00FF8800)) // bright accent
                     } else {
-                        CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00553322)) // dark blue-gray
+                        CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00CC6600)) // vivid orange-brown
                     };
                     FillRect(hdc, &badge_rect, badge_brush);
                     let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_brush);
 
                     if let Some(letter) = win.letter {
-                        let text_color = if is_selected {
-                            windows::Win32::Foundation::COLORREF(0x00FFFFFF) // white
-                        } else {
-                            windows::Win32::Foundation::COLORREF(0x00EEEEFF) // light
-                        };
-                        SetTextColor(hdc, text_color);
+                        SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF)); // bright white always
                         let letter_upper = letter.to_uppercase().to_string();
                         let mut wtext: Vec<u16> = letter_upper.encode_utf16().collect();
                         let mut letter_rect = badge_rect;
@@ -426,6 +430,33 @@ unsafe extern "system" fn overlay_wndproc(
                             hdc,
                             &mut wtext,
                             &mut letter_rect,
+                            DT_CENTER | DT_SINGLELINE | DT_VCENTER,
+                        );
+                    }
+
+                    // Number tag badge — top-right of the actual thumbnail
+                    if let Some(tag) = win.number_tag {
+                        let tag_sz: i32 = 20;
+                        let tag_margin: i32 = 6;
+                        let tag_rect = RECT {
+                            left: (tb.x + tb.width) as i32 - tag_sz - tag_margin,
+                            top: tb.y as i32 + tag_margin,
+                            right: (tb.x + tb.width) as i32 - tag_margin,
+                            bottom: tb.y as i32 + tag_margin + tag_sz,
+                        };
+                        let tag_brush = CreateSolidBrush(
+                            windows::Win32::Foundation::COLORREF(0x0018BFF0), // amber
+                        );
+                        FillRect(hdc, &tag_rect, tag_brush);
+                        let _ = windows::Win32::Graphics::Gdi::DeleteObject(tag_brush);
+
+                        SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00101010));
+                        let mut tag_text: Vec<u16> = tag.to_string().encode_utf16().collect();
+                        let mut tag_text_rect = tag_rect;
+                        DrawTextW(
+                            hdc,
+                            &mut tag_text,
+                            &mut tag_text_rect,
                             DT_CENTER | DT_SINGLELINE | DT_VCENTER,
                         );
                     }

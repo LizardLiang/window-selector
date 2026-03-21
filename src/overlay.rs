@@ -1,6 +1,7 @@
 use crate::accent_color::get_accent_color;
 use crate::animation::{FadeAnimator, FADE_TIMER_ID};
 use crate::dwm_thumbnails::{self, ThumbnailHandle};
+use crate::grid_layout::CellRect;
 use crate::grid_layout::{compute_grid, GridLayout};
 use crate::monitor::MonitorInfo;
 use crate::overlay_renderer::OverlayRenderer;
@@ -73,6 +74,8 @@ pub struct OverlayManager {
     pub monitors: Vec<MonitorInfo>,
     pub animator: FadeAnimator,
     thumbnails: Vec<ThumbnailHandle>,
+    /// Actual letterboxed thumbnail bounds per window (for badge positioning).
+    pub thumbnail_bounds: Vec<CellRect>,
     pub grid_layout: Option<GridLayout>,
     pub area_width: f32,
     pub area_height: f32,
@@ -99,6 +102,7 @@ impl OverlayManager {
             monitors: Vec::new(),
             animator: FadeAnimator::new(),
             thumbnails: Vec::new(),
+            thumbnail_bounds: Vec::new(),
             grid_layout: None,
             area_width: 0.0,
             area_height: 0.0,
@@ -246,11 +250,13 @@ impl OverlayManager {
         let grid = compute_grid(windows.len(), w, h);
 
         // Register DWM thumbnails on the primary overlay HWND.
-        self.thumbnails = dwm_thumbnails::register_thumbnails(
+        let reg = dwm_thumbnails::register_thumbnails(
             self.overlay_hwnds[0],
             windows,
             &grid.cells,
         );
+        self.thumbnails = reg.handles;
+        self.thumbnail_bounds = reg.thumb_bounds;
         self.grid_layout = Some(grid);
 
         // Store snapshot for rendering.
@@ -361,6 +367,7 @@ impl OverlayManager {
     pub fn hide_windows(&mut self) {
         // Unregister DWM thumbnails.
         self.thumbnails.clear();
+        self.thumbnail_bounds.clear();
         self.grid_layout = None;
 
         unsafe {

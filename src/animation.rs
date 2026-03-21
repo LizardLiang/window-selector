@@ -11,10 +11,10 @@ pub const ALPHA_MIN: u8 = 0;
 pub const FADE_TIMER_INTERVAL_MS: u32 = 16;
 /// Fade duration in milliseconds.
 #[allow(dead_code)]
-pub const FADE_DURATION_MS: u32 = 80;
+pub const FADE_DURATION_MS: u32 = 150;
 /// Alpha delta per timer tick.
-/// 220 / (80ms / 16ms) = 220 / 5 = 44
-pub const ALPHA_DELTA: u8 = 44;
+/// 220 / (150ms / 16ms) ≈ 220 / 9.4 ≈ 24
+pub const ALPHA_DELTA: u8 = 24;
 /// Timer ID for the fade animation.
 pub const FADE_TIMER_ID: usize = 1001;
 
@@ -155,8 +155,8 @@ mod tests {
         assert_eq!(ALPHA_MIN, 0);
         assert_eq!(FADE_TIMER_INTERVAL_MS, 16);
         assert!(ALPHA_DELTA > 0);
-        // Should complete in ~5 ticks: 220 / 44 = 5
+        // Should complete in ~10 ticks: 220 / 24 ≈ 9.2
         let expected_ticks = (ALPHA_MAX as f32 / ALPHA_DELTA as f32).ceil() as u32;
-        assert!(expected_ticks <= 6, "Should complete in <= 6 ticks");
+        assert!(expected_ticks <= 12, "Should complete in <= 12 ticks");
     }
 }

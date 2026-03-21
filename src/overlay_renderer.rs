@@ -24,19 +24,20 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
 // Logical size constants (scaled by DPI at render time)
-const LABEL_FONT_SIZE: f32 = 72.0;    // pt
-const TITLE_FONT_SIZE: f32 = 14.0;    // pt
-const BADGE_FONT_SIZE: f32 = 13.0;    // pt
-const CELL_CORNER_RADIUS: f32 = 6.0;
-const LABEL_PILL_CORNER_RADIUS: f32 = 14.0;
-const SELECTION_BORDER_WIDTH: f32 = 3.0;
+const LABEL_FONT_SIZE: f32 = 18.0;
+const TITLE_FONT_SIZE: f32 = 13.0;
+const BADGE_FONT_SIZE: f32 = 11.0;
+const CELL_CORNER_RADIUS: f32 = 12.0;
+const LABEL_PILL_CORNER_RADIUS: f32 = 6.0;
+const SELECTION_BORDER_WIDTH: f32 = 2.0;
 /// Height reserved at the bottom of each cell for the letter label.
 /// Must match `LABEL_STRIP_HEIGHT` in `dwm_thumbnails.rs`.
-const LABEL_STRIP_HEIGHT: f32 = 120.0;
-const BADGE_SIZE: f32 = 24.0;         // Badge pill size
-// Pill dimensions — large enough for the jumbo font
-const LABEL_PILL_W: f32 = 100.0;
-const LABEL_PILL_H: f32 = 96.0;
+const LABEL_STRIP_HEIGHT: f32 = 40.0;
+const BADGE_SIZE: f32 = 20.0;
+const LABEL_PILL_W: f32 = 34.0;
+const LABEL_PILL_H: f32 = 28.0;
+/// Subtle glass border width for cell edges.
+const CELL_BORDER_WIDTH: f32 = 1.0;
 
 /// The Direct2D + DirectWrite rendering context for an overlay window.
 #[allow(dead_code)]
@@ -48,12 +49,13 @@ pub struct OverlayRenderer {
     // Brushes
     pub backdrop_brush: ID2D1SolidColorBrush,
     pub cell_bg_brush: ID2D1SolidColorBrush,
+    pub cell_border_brush: ID2D1SolidColorBrush,
     pub text_brush: ID2D1SolidColorBrush,
     pub label_semi_brush: ID2D1SolidColorBrush,
-    /// Dark text brush for the letter label when drawn on the bright white pill.
     pub label_dark_text_brush: ID2D1SolidColorBrush,
     pub label_accent_brush: ID2D1SolidColorBrush,
     pub selection_border_brush: ID2D1SolidColorBrush,
+    pub selection_fill_brush: ID2D1SolidColorBrush,
     pub badge_brush: ID2D1SolidColorBrush,
     pub badge_text_brush: ID2D1SolidColorBrush,
 
@@ -97,49 +99,56 @@ impl OverlayRenderer {
             render_target
                 .SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
 
-            // Create brushes
+            // Create brushes — refined dark palette with subtle cool tint
             let backdrop_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(0.0, 0.0, 0.0, 0.80),
+                &d2d_color(0.02, 0.03, 0.06, 0.86),
                 None,
             )?;
             let cell_bg_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(0.12, 0.12, 0.12, 0.92),
+                &d2d_color(0.07, 0.08, 0.12, 0.95),
+                None,
+            )?;
+            let cell_border_brush = render_target.CreateSolidColorBrush(
+                &d2d_color(1.0, 1.0, 1.0, 0.07),
                 None,
             )?;
             let text_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 1.0, 1.0, 1.0),
+                &d2d_color(1.0, 1.0, 1.0, 0.95),
                 None,
             )?;
-            // Bright white pill for unselected letter labels — high contrast on the
-            // dark cell background so the hotkey letter is always easy to read.
+            // Frosted glass pill for unselected letter labels.
             let label_semi_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 1.0, 1.0, 0.90),
+                &d2d_color(1.0, 1.0, 1.0, 0.12),
                 None,
             )?;
-            // Dark letter text drawn on the white pill (white-on-white would be invisible).
+            // White text on frosted glass pill.
             let label_dark_text_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(0.05, 0.05, 0.05, 1.0),
+                &d2d_color(1.0, 1.0, 1.0, 0.92),
                 None,
             )?;
             let label_accent_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(accent.r, accent.g, accent.b, 1.0),
+                &d2d_color(accent.r, accent.g, accent.b, 0.90),
                 None,
             )?;
             let selection_border_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(accent.r, accent.g, accent.b, 1.0),
+                &d2d_color(accent.r, accent.g, accent.b, 0.85),
+                None,
+            )?;
+            let selection_fill_brush = render_target.CreateSolidColorBrush(
+                &d2d_color(accent.r, accent.g, accent.b, 0.10),
                 None,
             )?;
             let badge_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 0.7, 0.0, 1.0), // Amber
+                &d2d_color(1.0, 0.75, 0.15, 0.90),
                 None,
             )?;
             let badge_text_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(0.0, 0.0, 0.0, 1.0),
+                &d2d_color(0.0, 0.0, 0.0, 0.95),
                 None,
             )?;
 
-            // Text formats
-            let font_name: Vec<u16> = "Segoe UI\0".encode_utf16().collect();
+            // Text formats — Segoe UI Variable for Windows 11 polish
+            let font_name: Vec<u16> = "Segoe UI Variable\0".encode_utf16().collect();
             let locale: Vec<u16> = "en-us\0".encode_utf16().collect();
 
             let label_format = dwrite_factory.CreateTextFormat(
@@ -184,11 +193,13 @@ impl OverlayRenderer {
                 render_target,
                 backdrop_brush,
                 cell_bg_brush,
+                cell_border_brush,
                 text_brush,
                 label_semi_brush,
                 label_dark_text_brush,
                 label_accent_brush,
                 selection_border_brush,
+                selection_fill_brush,
                 badge_brush,
                 badge_text_brush,
                 label_format,
@@ -256,7 +267,7 @@ impl OverlayRenderer {
                     let cell = &cells[i];
                     let is_selected = selected == Some(i);
                     let effective_cell = if is_selected {
-                        cell.scaled(1.05)
+                        cell.scaled(1.03)
                     } else {
                         *cell
                     };
@@ -286,8 +297,18 @@ impl OverlayRenderer {
             self.render_target
                 .FillRoundedRectangle(&rounded, &self.cell_bg_brush);
 
-            // Selection border (drawn on top of cell bg)
+            // Glass border — subtle white edge for depth
+            self.render_target.DrawRoundedRectangle(
+                &rounded,
+                &self.cell_border_brush,
+                CELL_BORDER_WIDTH * dpi,
+                None,
+            );
+
+            // Selection: accent glow fill + border
             if is_selected {
+                self.render_target
+                    .FillRoundedRectangle(&rounded, &self.selection_fill_brush);
                 self.render_target.DrawRoundedRectangle(
                     &rounded,
                     &self.selection_border_brush,
@@ -298,14 +319,8 @@ impl OverlayRenderer {
 
             // --- Label strip (bottom of cell) ---
             let label_y = cell.y + cell.height - label_h;
-            let _label_strip_rect = d2d_rect(
-                cell.x,
-                label_y,
-                cell.x + cell.width,
-                cell.y + cell.height,
-            );
 
-            // Letter label pill
+            // Letter label pill — compact badge at bottom-center
             if let Some(letter) = window.letter {
                 let pill_w = LABEL_PILL_W * dpi;
                 let pill_h = LABEL_PILL_H * dpi;
@@ -321,15 +336,12 @@ impl OverlayRenderer {
 
                 let (pill_brush, letter_text_brush): (&ID2D1SolidColorBrush, &ID2D1SolidColorBrush) =
                     if is_selected {
-                        // Selected: accent-colored pill with white letter
                         (&self.label_accent_brush, &self.text_brush)
                     } else {
-                        // Unselected: bright white pill with dark letter for maximum contrast
                         (&self.label_semi_brush, &self.label_dark_text_brush)
                     };
                 self.render_target.FillRoundedRectangle(&pill_rounded, pill_brush);
 
-                // Letter text
                 let letter_text: Vec<u16> = letter.to_uppercase().to_string().encode_utf16().collect();
                 self.render_target.DrawText(
                     &letter_text,
@@ -341,11 +353,11 @@ impl OverlayRenderer {
                 );
             }
 
-            // Window title (above label pill, at the bottom of cell)
+            // Window title
             let title_rect = d2d_rect(
-                cell.x + 4.0 * dpi,
-                cell.y + cell.height - label_h - 20.0 * dpi,
-                cell.x + cell.width - 4.0 * dpi,
+                cell.x + 6.0 * dpi,
+                cell.y + cell.height - label_h - 18.0 * dpi,
+                cell.x + cell.width - 6.0 * dpi,
                 cell.y + cell.height - label_h,
             );
             let title_text: Vec<u16> = window.title.encode_utf16().collect();
@@ -361,8 +373,8 @@ impl OverlayRenderer {
             // Number badge (top-right corner)
             if let Some(tag) = window.number_tag {
                 let badge_sz = BADGE_SIZE * dpi;
-                let badge_x = cell.x + cell.width - badge_sz - 4.0 * dpi;
-                let badge_y = cell.y + 4.0 * dpi;
+                let badge_x = cell.x + cell.width - badge_sz - 6.0 * dpi;
+                let badge_y = cell.y + 6.0 * dpi;
                 let badge_rect = d2d_rect(badge_x, badge_y, badge_x + badge_sz, badge_y + badge_sz);
                 let badge_rounded = D2D1_ROUNDED_RECT {
                     rect: badge_rect,

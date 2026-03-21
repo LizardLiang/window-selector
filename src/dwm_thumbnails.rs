@@ -34,18 +34,24 @@ impl Drop for ThumbnailHandle {
 /// on a separate overlay window that sits above this one.
 const LABEL_STRIP_HEIGHT: f32 = 0.0;
 
+/// Result of thumbnail registration: handles for DWM management, and the actual
+/// letterboxed bounds of each thumbnail (for positioning badges on top).
+pub struct ThumbnailRegistration {
+    pub handles: Vec<ThumbnailHandle>,
+    /// The actual destination rect of each thumbnail after aspect-ratio fitting.
+    /// For blank/minimized windows, falls back to the full cell rect.
+    pub thumb_bounds: Vec<CellRect>,
+}
+
 /// Register DWM thumbnails for all windows in the snapshot.
-/// Returns a Vec of ThumbnailHandle, one per window.
-/// Windows with blank thumbnails (e.g., minimized) are marked is_blank=true.
-///
-/// Thumbnails are placed in the upper portion of each cell, leaving the bottom
-/// `LABEL_STRIP_HEIGHT` pixels free for the letter label rendered by Direct2D.
+/// Returns handles and the actual letterboxed thumbnail bounds per window.
 pub fn register_thumbnails(
     destination_hwnd: HWND,
     windows: &[WindowInfo],
     cells: &[CellRect],
-) -> Vec<ThumbnailHandle> {
+) -> ThumbnailRegistration {
     let mut handles = Vec::new();
+    let mut thumb_bounds = Vec::new();
 
     for (i, window) in windows.iter().enumerate() {
         if i >= cells.len() {
@@ -69,6 +75,7 @@ pub fn register_thumbnails(
                         cell_index: i,
                         is_blank: true,
                     });
+                    thumb_bounds.push(*cell);
                     continue;
                 }
             };
@@ -79,7 +86,17 @@ pub fn register_thumbnails(
 
             if !is_blank {
                 let thumb_cell = thumbnail_dest_rect(cell, LABEL_STRIP_HEIGHT);
-                let dest_rect = cell_to_rect(&thumb_cell);
+                let dest_rect = letterbox_rect(&thumb_cell, source_size.cx, source_size.cy);
+
+                // Store the actual thumbnail bounds as CellRect
+                thumb_bounds.push(CellRect {
+                    x: dest_rect.left as f32,
+                    y: dest_rect.top as f32,
+                    width: (dest_rect.right - dest_rect.left) as f32,
+                    height: (dest_rect.bottom - dest_rect.top) as f32,
+                    window_index: i,
+                });
+
                 let props = DWM_THUMBNAIL_PROPERTIES {
                     dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY,
                     rcDestination: dest_rect,
@@ -97,6 +114,8 @@ pub fn register_thumbnails(
                         e
                     );
                 }
+            } else {
+                thumb_bounds.push(*cell);
             }
 
             handles.push(ThumbnailHandle {
@@ -108,7 +127,7 @@ pub fn register_thumbnails(
         }
     }
 
-    handles
+    ThumbnailRegistration { handles, thumb_bounds }
 }
 
 /// Update thumbnail destination rects (e.g., on selection change causing scale-up).
@@ -163,6 +182,35 @@ fn cell_to_rect(cell: &CellRect) -> RECT {
         top: cell.y as i32,
         right: (cell.x + cell.width) as i32,
         bottom: (cell.y + cell.height) as i32,
+    }
+}
+
+/// Compute a destination RECT that fits the source aspect ratio within the cell,
+/// centered with letterboxing/pillarboxing as needed.
+fn letterbox_rect(cell: &CellRect, src_w: i32, src_h: i32) -> RECT {
+    if src_w <= 0 || src_h <= 0 {
+        return cell_to_rect(cell);
+    }
+
+    let src_aspect = src_w as f32 / src_h as f32;
+    let cell_aspect = cell.width / cell.height;
+
+    let (fit_w, fit_h) = if src_aspect > cell_aspect {
+        // Source is wider — fit to cell width, letterbox vertically
+        (cell.width, cell.width / src_aspect)
+    } else {
+        // Source is taller — fit to cell height, pillarbox horizontally
+        (cell.height * src_aspect, cell.height)
+    };
+
+    let offset_x = (cell.width - fit_w) / 2.0;
+    let offset_y = (cell.height - fit_h) / 2.0;
+
+    RECT {
+        left: (cell.x + offset_x) as i32,
+        top: (cell.y + offset_y) as i32,
+        right: (cell.x + offset_x + fit_w) as i32,
+        bottom: (cell.y + offset_y + fit_h) as i32,
     }
 }
 

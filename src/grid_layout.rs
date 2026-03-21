@@ -54,7 +54,7 @@ pub fn compute_grid(window_count: usize, area_width: f32, area_height: f32) -> G
         };
     }
 
-    const PADDING: f32 = 12.0;
+    const PADDING: f32 = 16.0;
     const MIN_CELL_WIDTH: f32 = 160.0;
     const MIN_CELL_HEIGHT: f32 = 120.0;
 
