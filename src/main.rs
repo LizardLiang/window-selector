@@ -38,8 +38,9 @@ use window_switcher::{restore_focus, switch_to_window};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateSolidBrush, EndPaint, FillRect, SelectObject,
-    SetBkMode, SetTextColor, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, EndPaint, FillRect,
+    RoundRect, SelectObject, SetBkMode, SetTextColor,
+    PAINTSTRUCT, PS_NULL, TRANSPARENT,
     DrawTextW, DT_CENTER, DT_SINGLELINE, DT_VCENTER,
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -390,6 +391,12 @@ unsafe extern "system" fn overlay_wndproc(
                 let old_font = SelectObject(hdc, font);
                 SetBkMode(hdc, TRANSPARENT);
 
+                // Null pen so RoundRect doesn't draw an outline stroke
+                let null_pen = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
+                let old_pen = SelectObject(hdc, null_pen);
+
+                let corner_sz: i32 = 10; // rounded corner radius
+
                 for (i, cell) in layout.cells.iter().enumerate() {
                     if i >= app.window_snapshot.len() {
                         break;
@@ -412,17 +419,45 @@ unsafe extern "system" fn overlay_wndproc(
                         bottom: (tb.y + tb.height) as i32 - badge_margin,
                     };
 
-                    // COLORREF is 0x00BBGGRR — high-visibility colors
+                    // Aura glow behind badge — soft rounded halo
+                    let glow_expand: i32 = if is_selected { 4 } else { 2 };
+                    let glow_brush = CreateSolidBrush(
+                        windows::Win32::Foundation::COLORREF(0x00221100),
+                    );
+                    let old_glow = SelectObject(hdc, glow_brush);
+                    RoundRect(
+                        hdc,
+                        badge_rect.left - glow_expand,
+                        badge_rect.top - glow_expand,
+                        badge_rect.right + glow_expand,
+                        badge_rect.bottom + glow_expand,
+                        corner_sz + glow_expand,
+                        corner_sz + glow_expand,
+                    );
+                    SelectObject(hdc, old_glow);
+                    let _ = windows::Win32::Graphics::Gdi::DeleteObject(glow_brush);
+
+                    // Badge fill — rounded rect
                     let badge_brush = if is_selected {
-                        CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00FF8800)) // bright accent
+                        CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00FF8800))
                     } else {
-                        CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00CC6600)) // vivid orange-brown
+                        CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00CC6600))
                     };
-                    FillRect(hdc, &badge_rect, badge_brush);
+                    let old_badge = SelectObject(hdc, badge_brush);
+                    RoundRect(
+                        hdc,
+                        badge_rect.left,
+                        badge_rect.top,
+                        badge_rect.right,
+                        badge_rect.bottom,
+                        corner_sz,
+                        corner_sz,
+                    );
+                    SelectObject(hdc, old_badge);
                     let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_brush);
 
                     if let Some(letter) = win.letter {
-                        SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF)); // bright white always
+                        SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
                         let letter_upper = letter.to_uppercase().to_string();
                         let mut wtext: Vec<u16> = letter_upper.encode_utf16().collect();
                         let mut letter_rect = badge_rect;
@@ -434,25 +469,34 @@ unsafe extern "system" fn overlay_wndproc(
                         );
                     }
 
-                    // Number tag badge — top-right of the actual thumbnail
+                    // Number tag badge — top-right, fully rounded (circle)
                     if let Some(tag) = win.number_tag {
                         let tag_sz: i32 = 20;
                         let tag_margin: i32 = 6;
-                        let tag_rect = RECT {
+                        let tag_brush = CreateSolidBrush(
+                            windows::Win32::Foundation::COLORREF(0x0018BFF0), // amber
+                        );
+                        let old_tag = SelectObject(hdc, tag_brush);
+                        RoundRect(
+                            hdc,
+                            (tb.x + tb.width) as i32 - tag_sz - tag_margin,
+                            tb.y as i32 + tag_margin,
+                            (tb.x + tb.width) as i32 - tag_margin,
+                            tb.y as i32 + tag_margin + tag_sz,
+                            tag_sz,
+                            tag_sz,
+                        );
+                        SelectObject(hdc, old_tag);
+                        let _ = windows::Win32::Graphics::Gdi::DeleteObject(tag_brush);
+
+                        SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00101010));
+                        let mut tag_text: Vec<u16> = tag.to_string().encode_utf16().collect();
+                        let mut tag_text_rect = RECT {
                             left: (tb.x + tb.width) as i32 - tag_sz - tag_margin,
                             top: tb.y as i32 + tag_margin,
                             right: (tb.x + tb.width) as i32 - tag_margin,
                             bottom: tb.y as i32 + tag_margin + tag_sz,
                         };
-                        let tag_brush = CreateSolidBrush(
-                            windows::Win32::Foundation::COLORREF(0x0018BFF0), // amber
-                        );
-                        FillRect(hdc, &tag_rect, tag_brush);
-                        let _ = windows::Win32::Graphics::Gdi::DeleteObject(tag_brush);
-
-                        SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00101010));
-                        let mut tag_text: Vec<u16> = tag.to_string().encode_utf16().collect();
-                        let mut tag_text_rect = tag_rect;
                         DrawTextW(
                             hdc,
                             &mut tag_text,
@@ -462,6 +506,8 @@ unsafe extern "system" fn overlay_wndproc(
                     }
                 }
 
+                SelectObject(hdc, old_pen);
+                let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
                 SelectObject(hdc, old_font);
                 let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
             }

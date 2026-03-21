@@ -33,6 +33,8 @@ impl Drop for ThumbnailHandle {
 /// No reservation — thumbnails fill the full cell. Labels are drawn
 /// on a separate overlay window that sits above this one.
 const LABEL_STRIP_HEIGHT: f32 = 0.0;
+/// Inset margin between cell edge and thumbnail (reveals cell background).
+const THUMB_MARGIN: f32 = 6.0;
 
 /// Result of thumbnail registration: handles for DWM management, and the actual
 /// letterboxed bounds of each thumbnail (for positioning badges on top).
@@ -86,7 +88,14 @@ pub fn register_thumbnails(
 
             if !is_blank {
                 let thumb_cell = thumbnail_dest_rect(cell, LABEL_STRIP_HEIGHT);
-                let dest_rect = letterbox_rect(&thumb_cell, source_size.cx, source_size.cy);
+                let inset_cell = CellRect {
+                    x: thumb_cell.x + THUMB_MARGIN,
+                    y: thumb_cell.y + THUMB_MARGIN,
+                    width: (thumb_cell.width - THUMB_MARGIN * 2.0).max(0.0),
+                    height: (thumb_cell.height - THUMB_MARGIN * 2.0).max(0.0),
+                    window_index: thumb_cell.window_index,
+                };
+                let dest_rect = letterbox_rect(&inset_cell, source_size.cx, source_size.cy);
 
                 // Store the actual thumbnail bounds as CellRect
                 thumb_bounds.push(CellRect {

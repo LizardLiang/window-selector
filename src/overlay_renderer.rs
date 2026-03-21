@@ -56,6 +56,11 @@ pub struct OverlayRenderer {
     pub label_accent_brush: ID2D1SolidColorBrush,
     pub selection_border_brush: ID2D1SolidColorBrush,
     pub selection_fill_brush: ID2D1SolidColorBrush,
+    // Aura glow layers (inner → outer, decreasing opacity)
+    pub aura_brush_1: ID2D1SolidColorBrush,
+    pub aura_brush_2: ID2D1SolidColorBrush,
+    pub aura_brush_3: ID2D1SolidColorBrush,
+    pub ambient_glow_brush: ID2D1SolidColorBrush,
     pub badge_brush: ID2D1SolidColorBrush,
     pub badge_text_brush: ID2D1SolidColorBrush,
 
@@ -86,8 +91,13 @@ impl OverlayRenderer {
             let width = (client_rect.right - client_rect.left) as u32;
             let height = (client_rect.bottom - client_rect.top) as u32;
 
-            // Create HwndRenderTarget
-            let rt_props = D2D1_RENDER_TARGET_PROPERTIES::default();
+            // Create HwndRenderTarget — force 96 DPI so coordinates map 1:1
+            // to physical pixels (matching grid cells and DWM thumbnail rects).
+            let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
+                dpiX: 96.0,
+                dpiY: 96.0,
+                ..Default::default()
+            };
             let hwnd_rt_props = D2D1_HWND_RENDER_TARGET_PROPERTIES {
                 hwnd,
                 pixelSize: D2D_SIZE_U { width, height },
@@ -136,6 +146,24 @@ impl OverlayRenderer {
             )?;
             let selection_fill_brush = render_target.CreateSolidColorBrush(
                 &d2d_color(accent.r, accent.g, accent.b, 0.10),
+                None,
+            )?;
+            // Aura glow layers — concentric bloom rings around selected cells
+            let aura_brush_1 = render_target.CreateSolidColorBrush(
+                &d2d_color(accent.r, accent.g, accent.b, 0.25),
+                None,
+            )?;
+            let aura_brush_2 = render_target.CreateSolidColorBrush(
+                &d2d_color(accent.r, accent.g, accent.b, 0.14),
+                None,
+            )?;
+            let aura_brush_3 = render_target.CreateSolidColorBrush(
+                &d2d_color(accent.r, accent.g, accent.b, 0.07),
+                None,
+            )?;
+            // Ambient glow — soft luminance around every cell
+            let ambient_glow_brush = render_target.CreateSolidColorBrush(
+                &d2d_color(1.0, 1.0, 1.0, 0.06),
                 None,
             )?;
             let badge_brush = render_target.CreateSolidColorBrush(
@@ -200,6 +228,10 @@ impl OverlayRenderer {
                 label_accent_brush,
                 selection_border_brush,
                 selection_fill_brush,
+                aura_brush_1,
+                aura_brush_2,
+                aura_brush_3,
+                ambient_glow_brush,
                 badge_brush,
                 badge_text_brush,
                 label_format,
@@ -266,12 +298,7 @@ impl OverlayRenderer {
                     }
                     let cell = &cells[i];
                     let is_selected = selected == Some(i);
-                    let effective_cell = if is_selected {
-                        cell.scaled(1.03)
-                    } else {
-                        *cell
-                    };
-                    self.draw_cell(&effective_cell, window, is_selected);
+                    self.draw_cell(cell, window, is_selected);
                 }
             }
 
@@ -286,6 +313,46 @@ impl OverlayRenderer {
             let dpi = self.dpi_scale;
             let corner_r = CELL_CORNER_RADIUS * dpi;
             let label_h = LABEL_STRIP_HEIGHT * dpi;
+
+            // --- Aura glow layers (drawn BEFORE cell so they appear behind) ---
+            if is_selected {
+                // 3-layer bloom: each ring is progressively larger and more transparent
+                let aura_layers: [(&ID2D1SolidColorBrush, f32); 3] = [
+                    (&self.aura_brush_3, 24.0 * dpi), // outermost — faintest
+                    (&self.aura_brush_2, 14.0 * dpi),
+                    (&self.aura_brush_1, 6.0 * dpi),  // innermost — brightest
+                ];
+                for (brush, expand) in &aura_layers {
+                    let aura_rect = d2d_rect(
+                        cell.x - expand,
+                        cell.y - expand,
+                        cell.x + cell.width + expand,
+                        cell.y + cell.height + expand,
+                    );
+                    let aura_rounded = D2D1_ROUNDED_RECT {
+                        rect: aura_rect,
+                        radiusX: corner_r + expand,
+                        radiusY: corner_r + expand,
+                    };
+                    self.render_target.FillRoundedRectangle(&aura_rounded, *brush);
+                }
+            } else {
+                // Ambient glow — subtle luminance halo around every cell
+                let expand = 3.0 * dpi;
+                let glow_rect = d2d_rect(
+                    cell.x - expand,
+                    cell.y - expand,
+                    cell.x + cell.width + expand,
+                    cell.y + cell.height + expand,
+                );
+                let glow_rounded = D2D1_ROUNDED_RECT {
+                    rect: glow_rect,
+                    radiusX: corner_r + expand,
+                    radiusY: corner_r + expand,
+                };
+                self.render_target
+                    .FillRoundedRectangle(&glow_rounded, &self.ambient_glow_brush);
+            }
 
             // Cell background
             let cell_rect = d2d_rect(cell.x, cell.y, cell.x + cell.width, cell.y + cell.height);
@@ -305,7 +372,7 @@ impl OverlayRenderer {
                 None,
             );
 
-            // Selection: accent glow fill + border
+            // Selection: accent fill + border
             if is_selected {
                 self.render_target
                     .FillRoundedRectangle(&rounded, &self.selection_fill_brush);
@@ -317,83 +384,8 @@ impl OverlayRenderer {
                 );
             }
 
-            // --- Label strip (bottom of cell) ---
-            let label_y = cell.y + cell.height - label_h;
-
-            // Letter label pill — compact badge at bottom-center
-            if let Some(letter) = window.letter {
-                let pill_w = LABEL_PILL_W * dpi;
-                let pill_h = LABEL_PILL_H * dpi;
-                let pill_x = cell.x + cell.width / 2.0 - pill_w / 2.0;
-                let pill_y = label_y + (label_h - pill_h) / 2.0;
-
-                let pill_rect = d2d_rect(pill_x, pill_y, pill_x + pill_w, pill_y + pill_h);
-                let pill_rounded = D2D1_ROUNDED_RECT {
-                    rect: pill_rect,
-                    radiusX: LABEL_PILL_CORNER_RADIUS * dpi,
-                    radiusY: LABEL_PILL_CORNER_RADIUS * dpi,
-                };
-
-                let (pill_brush, letter_text_brush): (&ID2D1SolidColorBrush, &ID2D1SolidColorBrush) =
-                    if is_selected {
-                        (&self.label_accent_brush, &self.text_brush)
-                    } else {
-                        (&self.label_semi_brush, &self.label_dark_text_brush)
-                    };
-                self.render_target.FillRoundedRectangle(&pill_rounded, pill_brush);
-
-                let letter_text: Vec<u16> = letter.to_uppercase().to_string().encode_utf16().collect();
-                self.render_target.DrawText(
-                    &letter_text,
-                    &self.label_format,
-                    &pill_rect,
-                    letter_text_brush,
-                    D2D1_DRAW_TEXT_OPTIONS_NONE,
-                    windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
-                );
-            }
-
-            // Window title
-            let title_rect = d2d_rect(
-                cell.x + 6.0 * dpi,
-                cell.y + cell.height - label_h - 18.0 * dpi,
-                cell.x + cell.width - 6.0 * dpi,
-                cell.y + cell.height - label_h,
-            );
-            let title_text: Vec<u16> = window.title.encode_utf16().collect();
-            self.render_target.DrawText(
-                &title_text,
-                &self.title_format,
-                &title_rect,
-                &self.text_brush,
-                D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
-            );
-
-            // Number badge (top-right corner)
-            if let Some(tag) = window.number_tag {
-                let badge_sz = BADGE_SIZE * dpi;
-                let badge_x = cell.x + cell.width - badge_sz - 6.0 * dpi;
-                let badge_y = cell.y + 6.0 * dpi;
-                let badge_rect = d2d_rect(badge_x, badge_y, badge_x + badge_sz, badge_y + badge_sz);
-                let badge_rounded = D2D1_ROUNDED_RECT {
-                    rect: badge_rect,
-                    radiusX: badge_sz / 2.0,
-                    radiusY: badge_sz / 2.0,
-                };
-                self.render_target
-                    .FillRoundedRectangle(&badge_rounded, &self.badge_brush);
-
-                let tag_text: Vec<u16> = tag.to_string().encode_utf16().collect();
-                self.render_target.DrawText(
-                    &tag_text,
-                    &self.badge_format,
-                    &badge_rect,
-                    &self.badge_text_brush,
-                    D2D1_DRAW_TEXT_OPTIONS_NONE,
-                    windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
-                );
-            }
+            // Letters, titles, and number badges are rendered on the label
+            // overlay (GDI) which sits above DWM thumbnails — not here.
         }
     }
 

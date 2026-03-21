@@ -285,6 +285,16 @@ impl OverlayManager {
         *state = OverlayState::Active { selected: None };
 
         unsafe {
+            // Set overlay windows to fully opaque (skipping fade animation).
+            for &hwnd in &self.overlay_hwnds {
+                let _ = SetLayeredWindowAttributes(
+                    hwnd,
+                    windows::Win32::Foundation::COLORREF(0),
+                    crate::animation::ALPHA_MAX,
+                    LWA_ALPHA,
+                );
+            }
+
             // Show thumbnail overlays first.
             for &hwnd in &self.overlay_hwnds {
                 let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -311,6 +321,9 @@ impl OverlayManager {
                 let _ = InvalidateRect(hwnd, None, true);
             }
         }
+
+        // Render the D2D frame immediately (fade animation is skipped).
+        self.render_frame();
 
         tracing::info!("Overlay show: immediate (no fade)");
     }
@@ -381,10 +394,12 @@ impl OverlayManager {
         tracing::info!("Overlay hidden");
     }
 
-    /// Update render state and trigger a repaint of the label overlay HWND.
+    /// Update render state and repaint both the D2D surface and label overlay.
     pub fn redraw(&mut self, windows: &[WindowInfo], selected: Option<usize>) {
         self.render_snapshot = windows.to_vec();
         self.render_selected = selected;
+        // Repaint the D2D surface (backdrop, cell backgrounds, aura, selection).
+        self.render_frame();
         // Invalidate the label overlay to trigger WM_PAINT with GDI rendering.
         if let Some(lhwnd) = self.label_hwnd {
             unsafe { let _ = InvalidateRect(lhwnd, None, true); }
