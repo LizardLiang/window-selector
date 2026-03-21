@@ -567,9 +567,17 @@ unsafe fn handle_menu_command(app: &mut AppState, hwnd: HWND, cmd: u32) {
 /// overlay is active. Dispatches to `handle_overlay_key` and returns true to
 /// swallow the keystroke (prevent it from reaching the application below).
 fn keyboard_hook_handler(vk_code: u32) -> bool {
+    tracing::debug!("Hook: vk=0x{:02X} ({})", vk_code, vk_code);
     unsafe { handle_overlay_key(vk_code) };
-    // Swallow all key presses while the overlay is active.
-    true
+
+    // Don't swallow modifier keys — let them pass through so
+    // GetAsyncKeyState can see Ctrl/Shift/Alt state for Ctrl+Number tagging.
+    match vk_code {
+        0xA0..=0xA5 | // VK_LSHIFT, VK_RSHIFT, VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU
+        0x10..=0x12   // VK_SHIFT, VK_CONTROL, VK_MENU (generic)
+        => false, // pass through
+        _ => true, // swallow
+    }
 }
 
 unsafe fn handle_overlay_key(vk_code: u32) {

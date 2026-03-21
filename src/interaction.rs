@@ -2,7 +2,7 @@ use crate::state::{OverlayState, SessionTags};
 use crate::window_info::WindowInfo;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VK_CONTROL, VK_RETURN, VK_SPACE, VK_ESCAPE,
+    GetAsyncKeyState, VK_CONTROL, VK_RETURN, VK_SPACE, VK_ESCAPE,
     VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9,
     VK_A, VK_Z,
 };
@@ -74,10 +74,14 @@ pub fn handle_key_down(
         _ => {}
     }
 
-    let ctrl_held = unsafe { (GetKeyState(VK_CONTROL.0 as i32) as i16) < 0 };
+    // Use GetAsyncKeyState (physical key state) instead of GetKeyState
+    // because the low-level keyboard hook swallows all keystrokes before the
+    // message queue processes them, so GetKeyState never sees Ctrl as pressed.
+    let ctrl_held = unsafe { (GetAsyncKeyState(VK_CONTROL.0 as i32) as i16) < 0 };
 
     // Number keys (1-9)
     if let Some(num) = vk_to_digit(vk_code) {
+        tracing::debug!("Number key {} pressed, ctrl_held={}", num, ctrl_held);
         if ctrl_held {
             // Ctrl+Number: assign tag to selected window
             if let OverlayState::Active { selected: Some(idx) } = state {
