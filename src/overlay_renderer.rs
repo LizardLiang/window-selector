@@ -24,14 +24,17 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
 // Logical size constants (scaled by DPI at render time)
-const LABEL_FONT_SIZE: f32 = 36.0;    // pt
+const LABEL_FONT_SIZE: f32 = 42.0;    // pt — larger for legibility
 const TITLE_FONT_SIZE: f32 = 11.0;    // pt
 const BADGE_FONT_SIZE: f32 = 13.0;    // pt
 const CELL_CORNER_RADIUS: f32 = 6.0;
-const LABEL_PILL_CORNER_RADIUS: f32 = 8.0;
-const SELECTION_BORDER_WIDTH: f32 = 2.5;
-const LABEL_STRIP_HEIGHT: f32 = 60.0; // Height of the label area at the bottom of each cell
+const LABEL_PILL_CORNER_RADIUS: f32 = 10.0;
+const SELECTION_BORDER_WIDTH: f32 = 3.0;
+const LABEL_STRIP_HEIGHT: f32 = 70.0; // Height of the label area at the bottom of each cell
 const BADGE_SIZE: f32 = 24.0;         // Badge pill size
+// Pill dimensions — large enough for the font at typical DPI
+const LABEL_PILL_W: f32 = 60.0;
+const LABEL_PILL_H: f32 = 52.0;
 
 /// The Direct2D + DirectWrite rendering context for an overlay window.
 pub struct OverlayRenderer {
@@ -44,6 +47,8 @@ pub struct OverlayRenderer {
     pub cell_bg_brush: ID2D1SolidColorBrush,
     pub text_brush: ID2D1SolidColorBrush,
     pub label_semi_brush: ID2D1SolidColorBrush,
+    /// Dark text brush for the letter label when drawn on the bright white pill.
+    pub label_dark_text_brush: ID2D1SolidColorBrush,
     pub label_accent_brush: ID2D1SolidColorBrush,
     pub selection_border_brush: ID2D1SolidColorBrush,
     pub badge_brush: ID2D1SolidColorBrush,
@@ -102,8 +107,15 @@ impl OverlayRenderer {
                 &d2d_color(1.0, 1.0, 1.0, 1.0),
                 None,
             )?;
+            // Bright white pill for unselected letter labels — high contrast on the
+            // dark cell background so the hotkey letter is always easy to read.
             let label_semi_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(0.0, 0.0, 0.0, 0.55),
+                &d2d_color(1.0, 1.0, 1.0, 0.90),
+                None,
+            )?;
+            // Dark letter text drawn on the white pill (white-on-white would be invisible).
+            let label_dark_text_brush = render_target.CreateSolidColorBrush(
+                &d2d_color(0.05, 0.05, 0.05, 1.0),
                 None,
             )?;
             let label_accent_brush = render_target.CreateSolidColorBrush(
@@ -171,6 +183,7 @@ impl OverlayRenderer {
                 cell_bg_brush,
                 text_brush,
                 label_semi_brush,
+                label_dark_text_brush,
                 label_accent_brush,
                 selection_border_brush,
                 badge_brush,
@@ -295,8 +308,8 @@ impl OverlayRenderer {
 
             // Letter label pill
             if let Some(letter) = window.letter {
-                let pill_w = 48.0 * dpi;
-                let pill_h = 42.0 * dpi;
+                let pill_w = LABEL_PILL_W * dpi;
+                let pill_h = LABEL_PILL_H * dpi;
                 let pill_x = cell.x + cell.width / 2.0 - pill_w / 2.0;
                 let pill_y = label_y + (label_h - pill_h) / 2.0;
 
@@ -307,20 +320,23 @@ impl OverlayRenderer {
                     radiusY: LABEL_PILL_CORNER_RADIUS * dpi,
                 };
 
-                let pill_brush: &ID2D1SolidColorBrush = if is_selected {
-                    &self.label_accent_brush
-                } else {
-                    &self.label_semi_brush
-                };
+                let (pill_brush, letter_text_brush): (&ID2D1SolidColorBrush, &ID2D1SolidColorBrush) =
+                    if is_selected {
+                        // Selected: accent-colored pill with white letter
+                        (&self.label_accent_brush, &self.text_brush)
+                    } else {
+                        // Unselected: bright white pill with dark letter for maximum contrast
+                        (&self.label_semi_brush, &self.label_dark_text_brush)
+                    };
                 self.render_target.FillRoundedRectangle(&pill_rounded, pill_brush);
 
                 // Letter text
-                let letter_text: Vec<u16> = letter.to_string().encode_utf16().collect();
+                let letter_text: Vec<u16> = letter.to_uppercase().to_string().encode_utf16().collect();
                 self.render_target.DrawText(
                     &letter_text,
                     &self.label_format,
                     &pill_rect,
-                    &self.text_brush,
+                    letter_text_brush,
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
                 );

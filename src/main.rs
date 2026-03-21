@@ -8,6 +8,7 @@ mod dwm_thumbnails;
 mod grid_layout;
 mod hotkey;
 mod interaction;
+mod keyboard_hook;
 mod letter_assignment;
 mod logging;
 mod monitor;
@@ -42,8 +43,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
     GetMessageW, PostQuitMessage, RegisterClassExW, SetWindowLongPtrW, TranslateMessage,
     GWLP_USERDATA, HMENU, MSG, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_TIMER, WM_ACTIVATE, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, CS_HREDRAW, CS_VREDRAW, WA_INACTIVE,
+    WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_TIMER, WM_ACTIVATE, WM_PAINT,
+    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, CS_HREDRAW, CS_VREDRAW, WA_INACTIVE,
     HWND_MESSAGE,
 };
 
@@ -240,6 +241,10 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
         }
     }
 
+    // Install the low-level keyboard hook.  The hook starts inactive; it is
+    // enabled in activate_overlay() and disabled when the overlay hides.
+    keyboard_hook::install(keyboard_hook_handler);
+
     tracing::info!("Entering message loop");
 
     // Standard Win32 message loop.
@@ -257,6 +262,7 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
     hotkey::unregister_hotkey(msg_hwnd);
     remove_tray_icon(msg_hwnd);
     (*app_state_ptr).mru_tracker.uninstall_hook();
+    keyboard_hook::uninstall();
 
     set_app_state(std::ptr::null_mut());
     tracing::info!("Message loop exited, cleanup complete");
@@ -325,6 +331,19 @@ unsafe extern "system" fn overlay_wndproc(
     match msg {
         WM_KEYDOWN | WM_SYSKEYDOWN => {
             handle_overlay_key(wparam.0 as u32);
+            LRESULT(0)
+        }
+
+        WM_PAINT => {
+            let app_ptr = get_app_state();
+            if !app_ptr.is_null() {
+                let app = &mut *app_ptr;
+                // Render the overlay UI (letter labels, titles, selection border).
+                app.overlay_manager.render_frame();
+            } else {
+                // No app state yet — let DefWindowProcW validate the region.
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
             LRESULT(0)
         }
 
@@ -403,6 +422,10 @@ unsafe fn activate_overlay(app: &mut AppState) {
 
     let snap = app.window_snapshot.clone();
     app.overlay_manager.show(&snap, &mut app.overlay_state);
+
+    // Activate the keyboard hook so key presses reach the overlay regardless
+    // of whether SetForegroundWindow succeeded.
+    keyboard_hook::set_active(true);
 }
 
 unsafe fn handle_tray_event(app: &mut AppState, hwnd: HWND, lparam: LPARAM) {
@@ -428,6 +451,16 @@ unsafe fn handle_menu_command(app: &mut AppState, hwnd: HWND, cmd: u32) {
         }
         _ => {}
     }
+}
+
+/// Low-level keyboard hook handler.
+/// Called by `keyboard_hook::ll_keyboard_proc` on every key-down event while the
+/// overlay is active. Dispatches to `handle_overlay_key` and returns true to
+/// swallow the keystroke (prevent it from reaching the application below).
+fn keyboard_hook_handler(vk_code: u32) -> bool {
+    unsafe { handle_overlay_key(vk_code) };
+    // Swallow all key presses while the overlay is active.
+    true
 }
 
 unsafe fn handle_overlay_key(vk_code: u32) {
@@ -472,11 +505,16 @@ unsafe fn handle_fade_timer(app: &mut AppState) {
         match app.overlay_state.clone() {
             OverlayState::FadingIn => {
                 app.overlay_state = OverlayState::Active { selected: None };
+                // Render initial frame now that we are fully visible.
+                app.overlay_manager.render_frame();
                 tracing::debug!("Fade-in complete");
             }
             OverlayState::FadingOut { switch_target } => {
                 app.overlay_manager.hide_windows();
                 app.overlay_state = OverlayState::Hidden;
+
+                // Deactivate keyboard hook before switching focus.
+                keyboard_hook::set_active(false);
 
                 if let Some(target) = switch_target {
                     let _ = switch_to_window(target);

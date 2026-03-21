@@ -1,10 +1,13 @@
+use crate::accent_color::get_accent_color;
 use crate::animation::{FadeAnimator, FADE_TIMER_ID, FADE_TIMER_INTERVAL_MS};
 use crate::dwm_thumbnails::{self, ThumbnailHandle};
 use crate::grid_layout::{compute_grid, GridLayout};
 use crate::monitor::MonitorInfo;
+use crate::overlay_renderer::OverlayRenderer;
 use crate::state::OverlayState;
 use crate::window_info::WindowInfo;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, KillTimer, RegisterClassExW, SetForegroundWindow,
     SetLayeredWindowAttributes, SetTimer, ShowWindow, HMENU,
@@ -65,6 +68,13 @@ pub struct OverlayManager {
     grid_layout: Option<GridLayout>,
     pub area_width: f32,
     pub area_height: f32,
+    /// Direct2D + DirectWrite renderer for the primary overlay HWND.
+    /// Created lazily in `show()` the first time the overlay is displayed.
+    renderer: Option<OverlayRenderer>,
+    /// Snapshot of windows for the current overlay session (used in WM_PAINT).
+    pub render_snapshot: Vec<WindowInfo>,
+    /// Index of the currently selected window (used in WM_PAINT).
+    pub render_selected: Option<usize>,
 }
 
 // OverlayManager contains HWND values (raw pointers internally). The type is not
@@ -83,6 +93,9 @@ impl OverlayManager {
             grid_layout: None,
             area_width: 0.0,
             area_height: 0.0,
+            renderer: None,
+            render_snapshot: Vec::new(),
+            render_selected: None,
         }
     }
 
@@ -179,6 +192,28 @@ impl OverlayManager {
         );
         self.grid_layout = Some(grid);
 
+        // Store snapshot for rendering.
+        self.render_snapshot = windows.to_vec();
+        self.render_selected = None;
+
+        // Initialize (or re-initialize) the Direct2D renderer on the primary HWND.
+        // DPI scale: query from system; default to 1.0 on failure.
+        let dpi_scale = unsafe {
+            let dpi = GetDpiForWindow(self.overlay_hwnds[0]);
+            if dpi == 0 { 1.0f32 } else { dpi as f32 / 96.0 }
+        };
+        let accent = get_accent_color();
+        match OverlayRenderer::new(self.overlay_hwnds[0], dpi_scale, accent) {
+            Ok(r) => {
+                self.renderer = Some(r);
+                tracing::debug!("OverlayRenderer initialized (dpi_scale={})", dpi_scale);
+            }
+            Err(e) => {
+                tracing::error!("OverlayRenderer::new failed: {:?}", e);
+                self.renderer = None;
+            }
+        }
+
         unsafe {
             // Show all overlays.
             for &hwnd in &self.overlay_hwnds {
@@ -269,11 +304,32 @@ impl OverlayManager {
         tracing::info!("Overlay hidden");
     }
 
-    /// Invalidate the primary overlay HWND for a repaint.
-    pub fn redraw(&self, _windows: &[WindowInfo], _selected: Option<usize>) {
+    /// Update render state and trigger a repaint of the primary overlay HWND.
+    pub fn redraw(&mut self, windows: &[WindowInfo], selected: Option<usize>) {
+        self.render_snapshot = windows.to_vec();
+        self.render_selected = selected;
+        self.render_frame();
+    }
+
+    /// Render the current frame immediately using Direct2D.
+    /// Called from `redraw()` and from the `WM_PAINT` handler.
+    pub fn render_frame(&self) {
+        if let Some(renderer) = &self.renderer {
+            if let Some(layout) = &self.grid_layout {
+                renderer.render(
+                    &self.render_snapshot,
+                    &layout.cells,
+                    self.render_selected,
+                    self.area_width,
+                    self.area_height,
+                );
+            }
+        }
+        // Also invalidate so WM_PAINT is properly acknowledged (prevents a
+        // continuous stream of WM_PAINT messages from DefWindowProcW).
         if let Some(&hwnd) = self.overlay_hwnds.first() {
             unsafe {
-                windows::Win32::Graphics::Gdi::InvalidateRect(hwnd, None, false);
+                windows::Win32::Graphics::Gdi::ValidateRect(hwnd, None);
             }
         }
     }
