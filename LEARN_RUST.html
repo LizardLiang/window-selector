@@ -1,0 +1,1753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Learn Rust &mdash; window-selector</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@400;700;900&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=Fira+Code:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0b0f14;--surface:#111820;--surface2:#161e2a;--surface3:#1c2636;
+  --border:#1e2a3a;--border-light:#2a3a50;
+  --text:#c8d0da;--text-muted:#6b7a8d;--text-dim:#3d4d60;
+  --accent:#e8762d;--accent-glow:#e8762d40;--accent-dim:#e8762d18;
+  --amber:#f0bf18;--amber-dim:#f0bf1820;
+  --rust:#b7410e;--rust-dim:#b7410e30;
+  --green:#3fb950;--blue:#58a6ff;--purple:#bc8cff;--cyan:#56d4dd;--pink:#f778ba;
+  --red:#ff7b72;--yellow:#e3b341;
+  --code-bg:#0d1219;--code-border:#1a2333;
+  --font-display:'Bitter',Georgia,serif;
+  --font-body:'Source Sans 3','Segoe UI',sans-serif;
+  --font-code:'Fira Code','Cascadia Code','JetBrains Mono',monospace;
+  --sidebar-w:280px;
+  --progress:0;
+}
+html{scroll-behavior:smooth;font-size:16px;scrollbar-color:var(--border) var(--bg)}
+body{background:var(--bg);color:var(--text);font-family:var(--font-body);line-height:1.72;overflow-x:hidden}
+::selection{background:var(--accent);color:#fff}
+::-webkit-scrollbar{width:8px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:var(--border-light)}
+
+/* ═══ PROGRESS BAR ═══ */
+#progress-bar{position:fixed;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--rust),var(--accent),var(--amber));width:calc(var(--progress)*1%);z-index:1000;transition:width .3s ease;box-shadow:0 0 12px var(--accent-glow)}
+
+/* ═══ SIDEBAR ═══ */
+#sidebar{position:fixed;top:0;left:0;width:var(--sidebar-w);height:100vh;background:var(--surface);border-right:1px solid var(--border);z-index:100;display:flex;flex-direction:column;transition:transform .3s ease}
+#sidebar-header{padding:24px 20px 16px;border-bottom:1px solid var(--border)}
+#sidebar-header h1{font-family:var(--font-display);font-size:15px;font-weight:900;color:var(--accent);letter-spacing:.5px;text-transform:uppercase}
+#sidebar-header .subtitle{font-size:12px;color:var(--text-muted);margin-top:2px;letter-spacing:.3px}
+#toc{flex:1;overflow-y:auto;padding:12px 0;scrollbar-width:thin}
+#toc a{display:flex;align-items:center;padding:7px 20px;font-size:13.5px;color:var(--text-muted);text-decoration:none;transition:all .2s;border-left:2px solid transparent;gap:10px;line-height:1.3}
+#toc a:hover{color:var(--text);background:var(--surface2)}
+#toc a.active{color:var(--accent);border-left-color:var(--accent);background:var(--accent-dim)}
+#toc .ch-num{font-family:var(--font-code);font-size:11px;color:var(--text-dim);min-width:22px;font-weight:600}
+#toc .ch-check{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--border-light);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:9px;transition:all .3s}
+#toc .ch-check.done{border-color:var(--green);background:var(--green);color:#000}
+#sidebar-footer{padding:14px 20px;border-top:1px solid var(--border);font-size:12px;color:var(--text-dim)}
+#sidebar-footer .progress-text{font-family:var(--font-code);color:var(--text-muted);font-size:11px}
+
+/* ═══ LANG TOGGLE ═══ */
+#lang-toggle{display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer;user-select:none}
+#lang-toggle .lang-btn{font-family:var(--font-code);font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);color:var(--text-muted);background:none;cursor:pointer;transition:all .2s;letter-spacing:.5px}
+#lang-toggle .lang-btn.active{background:var(--accent);color:#000;border-color:var(--accent);font-weight:700}
+#lang-toggle .lang-btn:hover:not(.active){border-color:var(--text-muted);color:var(--text)}
+#lang-divider{color:var(--text-dim);font-size:10px}
+
+/* ═══ MOBILE TOGGLE ═══ */
+#menu-toggle{display:none;position:fixed;top:12px;left:12px;z-index:200;width:40px;height:40px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--accent);font-size:18px;cursor:pointer;align-items:center;justify-content:center}
+
+/* ═══ MAIN CONTENT ═══ */
+#main{margin-left:var(--sidebar-w);min-height:100vh}
+.chapter{padding:60px 48px 80px;border-bottom:1px solid var(--border);max-width:860px;opacity:0;transform:translateY(20px);transition:opacity .5s ease,transform .5s ease}
+.chapter.visible{opacity:1;transform:translateY(0)}
+
+/* ═══ HERO ═══ */
+#hero{padding:100px 48px 80px;max-width:860px;border-bottom:1px solid var(--border)}
+#hero .overline{font-family:var(--font-code);font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:2px;margin-bottom:16px}
+#hero h1{font-family:var(--font-display);font-size:clamp(32px,5vw,52px);font-weight:900;line-height:1.15;color:#eaeef3;margin-bottom:16px}
+#hero h1 em{font-style:normal;color:var(--accent);position:relative}
+#hero h1 em::after{content:'';position:absolute;bottom:-2px;left:0;width:100%;height:3px;background:var(--accent);border-radius:2px;opacity:.4}
+#hero .lead{font-size:18px;color:var(--text-muted);max-width:540px;line-height:1.7}
+#hero .stats{display:flex;gap:32px;margin-top:36px;flex-wrap:wrap}
+#hero .stat{text-align:center}
+#hero .stat-num{font-family:var(--font-display);font-size:28px;font-weight:900;color:var(--amber)}
+#hero .stat-label{font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+
+/* ═══ TYPOGRAPHY ═══ */
+.chapter h2{font-family:var(--font-display);font-size:28px;font-weight:900;color:#eaeef3;margin-bottom:8px;display:flex;align-items:center;gap:14px}
+.chapter h2 .ch-badge{font-family:var(--font-code);font-size:13px;background:var(--accent);color:#000;padding:3px 10px;border-radius:4px;font-weight:700}
+.chapter h3{font-family:var(--font-display);font-size:19px;font-weight:700;color:#d4dae3;margin:36px 0 12px;padding-top:12px}
+.chapter p{margin:12px 0;font-size:16.5px}
+.chapter strong{color:#dde3ec;font-weight:700}
+.chapter em{color:var(--cyan);font-style:italic}
+
+/* ═══ INLINE CODE ═══ */
+.chapter code:not(pre code){font-family:var(--font-code);font-size:13.5px;background:var(--surface2);color:var(--pink);padding:2px 7px;border-radius:4px;border:1px solid var(--border)}
+
+/* ═══ CODE BLOCKS ═══ */
+pre{background:var(--code-bg);border:1px solid var(--code-border);border-radius:10px;padding:0;margin:16px 0;overflow:hidden;position:relative}
+pre .code-header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:var(--surface);border-bottom:1px solid var(--code-border);font-family:var(--font-code);font-size:11px;color:var(--text-dim)}
+pre .code-header .lang{color:var(--accent);font-weight:600;text-transform:uppercase;letter-spacing:1px}
+pre .code-header .file-ref{color:var(--text-muted)}
+pre .copy-btn{background:none;border:1px solid var(--border);border-radius:4px;color:var(--text-muted);font-size:11px;padding:2px 8px;cursor:pointer;font-family:var(--font-code);transition:all .2s}
+pre .copy-btn:hover{color:var(--accent);border-color:var(--accent)}
+pre .copy-btn.copied{color:var(--green);border-color:var(--green)}
+pre code{display:block;padding:16px 20px;overflow-x:auto;font-family:var(--font-code);font-size:13.5px;line-height:1.65;color:var(--text);tab-size:4}
+
+/* ═══ SYNTAX HIGHLIGHTING ═══ */
+.hl-kw{color:#ff7b72;font-weight:600}
+.hl-ty{color:#79c0ff}
+.hl-fn{color:#d2a8ff}
+.hl-str{color:#a5d6ff}
+.hl-num{color:#79c0ff}
+.hl-cm{color:#484f58;font-style:italic}
+.hl-mac{color:#56d4dd}
+.hl-attr{color:#f0883e}
+.hl-op{color:#c9d1d9}
+.hl-life{color:#ffa657}
+.hl-self{color:#ff7b72;font-style:italic}
+.hl-bool{color:#79c0ff}
+
+/* ═══ LISTS ═══ */
+.chapter ul,.chapter ol{padding-left:24px;margin:10px 0}
+.chapter li{margin:6px 0;font-size:16px}
+.chapter li::marker{color:var(--accent)}
+
+/* ═══ TABLES ═══ */
+.chapter table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14.5px}
+.chapter th{text-align:left;padding:10px 14px;background:var(--surface2);color:var(--text-muted);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid var(--accent)}
+.chapter td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top}
+.chapter tr:hover td{background:var(--surface)}
+.chapter td code{font-size:12.5px}
+
+/* ═══ COLLAPSIBLE SECTIONS ═══ */
+details{margin:12px 0;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+details[open]{border-color:var(--border-light)}
+summary{padding:12px 16px;background:var(--surface);cursor:pointer;font-weight:700;font-size:15px;color:#d4dae3;display:flex;align-items:center;gap:8px;user-select:none;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:'>';font-family:var(--font-code);font-size:12px;color:var(--accent);transition:transform .2s;display:inline-block;width:16px}
+details[open] summary::before{transform:rotate(90deg)}
+summary:hover{background:var(--surface2)}
+details .detail-body{padding:16px 20px}
+
+/* ═══ CALLOUT BOXES ═══ */
+.callout{border-left:3px solid var(--accent);background:var(--accent-dim);padding:14px 18px;border-radius:0 8px 8px 0;margin:16px 0}
+.callout.warning{border-color:var(--amber);background:var(--amber-dim)}
+.callout.danger{border-color:var(--red);background:var(--rust-dim)}
+.callout-title{font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;color:var(--accent)}
+.callout.warning .callout-title{color:var(--amber)}
+.callout.danger .callout-title{color:var(--red)}
+
+/* ═══ FILE REFERENCE TAG ═══ */
+.file-tag{display:inline-flex;align-items:center;gap:4px;font-family:var(--font-code);font-size:12px;color:var(--amber);background:var(--amber-dim);padding:2px 8px;border-radius:4px;margin:4px 0}
+.file-tag::before{content:'>';color:var(--text-dim)}
+
+/* ═══ DIAGRAM ═══ */
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px;margin:20px 0;overflow-x:auto}
+.diagram pre{background:none;border:none;margin:0;padding:0}
+.diagram pre code{font-size:13px;color:var(--cyan);padding:0}
+
+/* ═══ EXERCISES ═══ */
+.exercise{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin:12px 0;position:relative}
+.exercise::before{content:attr(data-num);position:absolute;top:-10px;left:16px;background:var(--accent);color:#000;font-family:var(--font-code);font-size:11px;font-weight:700;padding:2px 10px;border-radius:4px}
+.exercise h4{font-family:var(--font-display);font-size:16px;margin-bottom:6px;color:#eaeef3}
+.exercise p{font-size:14.5px;color:var(--text-muted)}
+
+/* ═══ RESPONSIVE ═══ */
+@media(max-width:900px){
+  #sidebar{transform:translateX(-100%)}
+  #sidebar.open{transform:translateX(0);box-shadow:20px 0 60px rgba(0,0,0,.5)}
+  #main{margin-left:0}
+  #menu-toggle{display:flex}
+  .chapter{padding:40px 20px 60px}
+  #hero{padding:70px 20px 50px}
+  .chapter h2{font-size:24px}
+  pre code{font-size:12.5px}
+}
+@media(max-width:600px){
+  #hero h1{font-size:28px}
+  #hero .stats{gap:20px}
+  .chapter table{font-size:13px}
+  .chapter td,.chapter th{padding:8px 10px}
+}
+</style>
+</head>
+<body>
+
+<!-- Progress Bar -->
+<div id="progress-bar"></div>
+
+<!-- Mobile Menu Toggle -->
+<button id="menu-toggle" aria-label="Toggle navigation">&#9776;</button>
+
+<!-- Sidebar -->
+<nav id="sidebar">
+  <div id="sidebar-header">
+    <h1 data-i18n="sidebar-title">Rust Forge</h1>
+    <div class="subtitle" data-i18n="sidebar-subtitle">window-selector codebase tour</div>
+    <div id="lang-toggle">
+      <button class="lang-btn active" data-lang="en" onclick="setLang('en')">EN</button>
+      <span id="lang-divider">/</span>
+      <button class="lang-btn" data-lang="zh" onclick="setLang('zh')">&#32321;&#20013;</button>
+    </div>
+  </div>
+  <div id="toc"></div>
+  <div id="sidebar-footer">
+    <div class="progress-text"><span id="done-count">0</span> / 16 chapters read</div>
+  </div>
+</nav>
+
+<!-- Main Content -->
+<main id="main">
+
+<!-- HERO -->
+<section id="hero">
+  <div class="overline">// A hands-on Rust course</div>
+  <h1>Learn Rust Through<br><em>window-selector</em></h1>
+  <p class="lead">Every example is real code from your own codebase. No toy projects, no contrived exercises &mdash; just the patterns you actually shipped.</p>
+  <div class="stats">
+    <div class="stat"><div class="stat-num">16</div><div class="stat-label">Chapters</div></div>
+    <div class="stat"><div class="stat-num">22</div><div class="stat-label">Source Files</div></div>
+    <div class="stat"><div class="stat-num">67</div><div class="stat-label">Tests Pass</div></div>
+    <div class="stat"><div class="stat-num">7</div><div class="stat-label">Design Patterns</div></div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 1 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-1" data-chapter="1">
+  <h2><span class="ch-badge">01</span> Project Structure &amp; Module System</h2>
+
+  <h3>How Rust organizes code</h3>
+  <p>Rust uses a <strong>module tree</strong> rooted at <code>main.rs</code> (for binaries) or <code>lib.rs</code> (for libraries). Every <code>.rs</code> file in <code>src/</code> is a module, but it only becomes part of your program when you declare it with <code>mod</code>.</p>
+
+  <span class="file-tag">main.rs:3-24</span>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>mod about_dialog;
+mod accent_color;
+mod animation;
+mod config;
+mod dwm_thumbnails;
+mod grid_layout;
+mod hotkey;
+// ... 15 more modules</code></pre>
+
+  <p>Each <code>mod foo;</code> tells the compiler: <em>"load <code>src/foo.rs</code> and make it a child module of main."</em> Without this declaration, the file is <strong>ignored</strong> &mdash; even if it exists on disk.</p>
+
+  <h3>Visibility: <code>pub</code> vs private</h3>
+  <p>By default, everything in Rust is <strong>private</strong>. To use something from another module, mark it <code>pub</code>.</p>
+
+  <span class="file-tag">state.rs:8-23</span>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">public enum, public fields</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>pub enum OverlayState {    // pub → other modules can use this type
+    Hidden,
+    FadingIn,
+    Active {
+        selected: Option&lt;usize&gt;,  // fields inside enum variants are always public
+    },
+    FadingOut {
+        switch_target: Option&lt;HWND&gt;,
+    },
+}</code></pre>
+
+  <span class="file-tag">animation.rs:31-34</span>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">public struct, public fields</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>pub struct FadeAnimator {
+    pub current_alpha: u8,        // pub → overlay.rs can read this
+    pub direction: Option&lt;FadeDirection&gt;,
+}</code></pre>
+
+  <h3><code>use</code> imports</h3>
+  <p><code>use</code> brings items into scope so you don't write the full path every time.</p>
+
+  <span class="file-tag">interaction.rs:1-8</span>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>use crate::state::{OverlayState, SessionTags};  // crate:: = root of this project
+use crate::window_info::WindowInfo;
+use windows::Win32::Foundation::HWND;            // external crate
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_CONTROL, VK_RETURN,     // import multiple items from one path
+    VK_SPACE, VK_ESCAPE, VK_A, VK_Z,
+};</code></pre>
+
+  <div class="callout">
+    <div class="callout-title">Key syntax</div>
+    <ul>
+      <li><code>crate::</code> &mdash; start from your project root</li>
+      <li><code>super::</code> &mdash; go up one module (parent)</li>
+      <li><code>self::</code> &mdash; current module (rarely needed)</li>
+      <li><code>use X as Y</code> &mdash; rename on import</li>
+    </ul>
+  </div>
+
+  <h3><code>pub(crate)</code> &mdash; visible within the crate but not outside</h3>
+  <p>You'll sometimes see <code>pub(crate)</code> which means "public to other modules in this crate, but not to external users." Since this is a binary (not a library), <code>pub</code> and <code>pub(crate)</code> are functionally identical here.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 2 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-2" data-chapter="2">
+  <h2><span class="ch-badge">02</span> Ownership, Borrowing &amp; Lifetimes</h2>
+
+  <p>This is Rust's core innovation. Every value has exactly <strong>ONE owner</strong>. When the owner goes out of scope, the value is dropped (freed).</p>
+
+  <h3>Move semantics</h3>
+  <span class="file-tag">main.rs:207-217</span>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>let mut app_state = Box::new(AppState { ... });
+//  ^^^^^^^^^^^^^^^^ app_state OWNS this heap allocation
+
+let app_state_ptr = app_state.as_mut() as *mut AppState;
+//                  ^^^^^^^^^ borrow, then cast to raw pointer — ownership stays with app_state
+
+// ... later at line 292:
+drop(app_state);  // explicitly drop — frees the heap memory</code></pre>
+
+  <p>If you tried <code>let x = app_state;</code> somewhere in between, <code>app_state</code> would be <strong>moved</strong> into <code>x</code>, and using <code>app_state</code> afterward would be a compile error.</p>
+
+  <h3>Borrowing: <code>&amp;</code> and <code>&amp;mut</code></h3>
+  <ul>
+    <li><code>&amp;T</code> &mdash; shared/immutable reference. Multiple allowed simultaneously.</li>
+    <li><code>&amp;mut T</code> &mdash; exclusive/mutable reference. Only ONE at a time.</li>
+  </ul>
+
+  <span class="file-tag">interaction.rs:62-68</span>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>pub fn handle_key_down(
+    vk_code: u32,
+    state: &amp;OverlayState,          // shared borrow — just reading
+    windows: &amp;[WindowInfo],         // shared borrow of a slice
+    tags: &amp;mut SessionTags,         // exclusive borrow — we might modify
+    direct_switch: bool,            // copy — u32/bool implement Copy
+) -&gt; KeyAction {</code></pre>
+
+  <p>Why <code>&amp;[WindowInfo]</code> instead of <code>&amp;Vec&lt;WindowInfo&gt;</code>? A <strong>slice</strong> (<code>&amp;[T]</code>) is more flexible &mdash; it works with any contiguous data, not just <code>Vec</code>. This is a common Rust idiom.</p>
+
+  <h3>The borrow checker in action</h3>
+  <div class="callout danger">
+    <div class="callout-title">This won't compile</div>
+    <pre><div class="code-header"><span class="lang">rust</span></div><code>let mut v = vec![1, 2, 3];
+let first = &amp;v[0];     // shared borrow
+v.push(4);             // ERROR: can't mutate while shared borrow exists
+println!("{}", first); // first is still alive here</code></pre>
+  </div>
+
+  <p>In your codebase, you work around this naturally:</p>
+  <span class="file-tag">main.rs:595-596</span>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">cloning to avoid borrow conflicts</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>let snap = app.window_snapshot.clone();  // clone to get owned copy
+app.overlay_manager.show(&amp;snap, &amp;mut app.overlay_state);
+// Now app.overlay_manager borrows snap (not app.window_snapshot)
+// so there's no conflict with &amp;mut app.overlay_state</code></pre>
+
+  <h3>Clone vs Copy</h3>
+  <ul>
+    <li><strong><code>Copy</code></strong> &mdash; bitwise copy, automatic. For simple types: <code>u8</code>, <code>i32</code>, <code>f32</code>, <code>bool</code>, <code>char</code>.</li>
+    <li><strong><code>Clone</code></strong> &mdash; explicit deep copy via <code>.clone()</code>. For heap types: <code>String</code>, <code>Vec&lt;T&gt;</code>.</li>
+  </ul>
+
+  <span class="file-tag">window_info.rs:4</span>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>#[derive(Debug, Clone)]
+pub struct WindowInfo {
+    pub hwnd: HWND,
+    pub title: String,      // String is on the heap → needs Clone, not Copy
+    pub is_minimized: bool,  // bool is Copy
+    // ...
+}</code></pre>
+
+  <h3>Lifetimes (brief)</h3>
+  <p>Lifetimes appear when the compiler can't figure out how long a reference is valid. Your codebase avoids explicit lifetimes by using owned types and raw pointers for the Win32 interop. You'll mostly encounter lifetimes when writing generic functions that accept references.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 3 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-3" data-chapter="3">
+  <h2><span class="ch-badge">03</span> Structs &amp; Methods</h2>
+
+  <h3>Defining structs</h3>
+  <span class="file-tag">grid_layout.rs:5-13</span>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>#[derive(Debug, Clone, Copy, PartialEq)]  // derive = auto-implement traits
+pub struct CellRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub window_index: usize,
+}</code></pre>
+
+  <div class="callout">
+    <div class="callout-title">Derive macros explained</div>
+    <ul>
+      <li><code>Debug</code> &mdash; enables <code>{:?}</code> formatting for printing</li>
+      <li><code>Clone</code> &mdash; enables <code>.clone()</code></li>
+      <li><code>Copy</code> &mdash; enables implicit bitwise copy (only for simple stack types)</li>
+      <li><code>PartialEq</code> &mdash; enables <code>==</code> comparison</li>
+    </ul>
+  </div>
+
+  <h3><code>impl</code> blocks: methods and associated functions</h3>
+  <span class="file-tag">grid_layout.rs:15-32</span>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">method (takes &amp;self)</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>impl CellRect {
+    // This is a METHOD — takes &amp;self as first parameter
+    pub fn scaled(&amp;self, factor: f32) -&gt; CellRect {
+        let new_w = self.width * factor;
+        let new_h = self.height * factor;
+        let cx = self.x + self.width / 2.0;
+        let cy = self.y + self.height / 2.0;
+        CellRect {
+            x: cx - new_w / 2.0,
+            y: cy - new_h / 2.0,
+            width: new_w,
+            height: new_h,
+            window_index: self.window_index,
+        }
+    }
+}</code></pre>
+
+  <span class="file-tag">state.rs:51-56</span>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">associated function (constructor)</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>impl SessionTags {
+    pub fn new() -&gt; Self {   // Self = SessionTags. This is a constructor.
+        Self {
+            tags: HashMap::new(),
+        }
+    }
+}</code></pre>
+  <p>Call it: <code>SessionTags::new()</code> &mdash; note the <code>::</code> syntax, not <code>.</code>.</p>
+
+  <h3><code>&amp;self</code> vs <code>&amp;mut self</code> vs <code>self</code></h3>
+  <pre><div class="code-header"><span class="lang">rust</span></div><code>pub fn get(&amp;self, number: u8) -&gt; Option&lt;HWND&gt;    // read-only access
+pub fn assign(&amp;mut self, number: u8, hwnd: HWND) // modifying access
+pub fn into_inner(self) -&gt; HashMap&lt;u8, HWND&gt;      // consumes the struct (takes ownership)</code></pre>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 4 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-4" data-chapter="4">
+  <h2><span class="ch-badge">04</span> Enums &amp; Pattern Matching</h2>
+  <p>Rust enums are <strong>algebraic data types</strong> &mdash; each variant can hold different data.</p>
+
+  <h3>Defining enums</h3>
+  <span class="file-tag">state.rs:8-23</span>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>pub enum OverlayState {
+    Hidden,                           // no data
+    FadingIn,                         // no data
+    Active { selected: Option&lt;usize&gt; }, // struct-like variant with named field
+    FadingOut { switch_target: Option&lt;HWND&gt; }, // struct-like variant
+}</code></pre>
+
+  <span class="file-tag">interaction.rs:44-56</span>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>pub enum KeyAction {
+    None,
+    Select(usize),        // tuple-like variant holding a usize
+    SwitchTo(HWND),       // tuple-like variant holding an HWND
+    Dismiss,
+    TagAssigned,
+}</code></pre>
+
+  <h3><code>match</code> &mdash; exhaustive pattern matching</h3>
+  <p><code>match</code> forces you to handle EVERY variant. The compiler errors if you miss one.</p>
+
+  <span class="file-tag">main.rs:308-342</span>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">the main message dispatcher</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>match msg {
+    WM_CREATE =&gt; LRESULT(0),
+
+    WM_DESTROY =&gt; {
+        PostQuitMessage(0);
+        LRESULT(0)
+    }
+
+    WM_HOTKEY =&gt; {
+        if wparam.0 as i32 == hotkey::HOTKEY_ID {
+            handle_hotkey(app);
+        }
+        LRESULT(0)
+    }
+
+    // ... more arms ...
+
+    _ =&gt; DefWindowProcW(hwnd, msg, wparam, lparam),  // _ = catch-all
+}</code></pre>
+
+  <h3>Destructuring in match</h3>
+  <span class="file-tag">main.rs:676-698</span>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">matching KeyAction with destructuring</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>match action {
+    KeyAction::None =&gt; {}
+    KeyAction::Select(idx) =&gt; {           // extract the usize from Select
+        app.overlay_state = OverlayState::Active { selected: Some(idx) };
+        // ...
+    }
+    KeyAction::SwitchTo(target) =&gt; {      // extract the HWND from SwitchTo
+        app.overlay_manager.begin_hide(&amp;mut app.overlay_state, Some(target));
+    }
+    KeyAction::Dismiss =&gt; {
+        dismiss_overlay(app);
+    }
+    KeyAction::TagAssigned =&gt; { /* ... */ }
+}</code></pre>
+
+  <h3><code>if let</code> &amp; <code>matches!</code></h3>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">state.rs — match a single pattern</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>// if let — when you only care about ONE variant
+pub fn selected_index(&amp;self) -&gt; Option&lt;usize&gt; {
+    if let OverlayState::Active { selected } = self {
+        *selected
+    } else {
+        None
+    }
+}
+
+// matches! macro — boolean pattern check
+pub fn is_visible(&amp;self) -&gt; bool {
+    !matches!(self, OverlayState::Hidden)
+}</code></pre>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 5 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-5" data-chapter="5">
+  <h2><span class="ch-badge">05</span> Traits &amp; Polymorphism</h2>
+  <p>Traits are Rust's version of interfaces &mdash; they define shared behavior.</p>
+
+  <h3><code>impl Trait</code> for your types</h3>
+  <span class="file-tag">state.rs:95-99</span>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">implementing Default trait</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>impl Default for SessionTags {
+    fn default() -&gt; Self {
+        Self::new()
+    }
+}</code></pre>
+  <p>Now <code>SessionTags::default()</code> works, and any generic code that requires <code>T: Default</code> accepts <code>SessionTags</code>.</p>
+
+  <h3><code>Drop</code> &mdash; custom destructor (RAII)</h3>
+  <span class="file-tag">dwm_thumbnails.rs:23-31</span>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>impl Drop for ThumbnailHandle {
+    fn drop(&amp;mut self) {
+        if self.thumbnail_id != 0 {
+            unsafe {
+                let _ = DwmUnregisterThumbnail(self.thumbnail_id);
+            }
+        }
+    }
+}</code></pre>
+  <p>When a <code>ThumbnailHandle</code> goes out of scope, Rust automatically calls <code>drop()</code>. This is <strong>RAII</strong> (Resource Acquisition Is Initialization) &mdash; resources are cleaned up deterministically.</p>
+
+  <span class="file-tag">window_switcher.rs:21-37</span>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">RAII guard for thread input</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>struct ThreadInputGuard {
+    our_thread: u32,
+    target_thread: u32,
+}
+
+impl Drop for ThreadInputGuard {
+    fn drop(&amp;mut self) {
+        // Always detach thread input, even on panic or early return
+        let ok = unsafe {
+            AttachThreadInput(self.our_thread, self.target_thread, false).as_bool()
+        };
+    }
+}</code></pre>
+
+  <h3>Derive macros &amp; Serde</h3>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">config.rs — external derive macros</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>// Derive macros = compiler generates trait implementations for you
+#[derive(Debug, Clone, Copy, PartialEq)]
+
+// External derive macros (from serde crate) — auto-generate serialization code
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfig { ... }</code></pre>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 6 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-6" data-chapter="6">
+  <h2><span class="ch-badge">06</span> Error Handling</h2>
+  <p>Rust has no exceptions. Errors are values.</p>
+
+  <h3><code>Result&lt;T, E&gt;</code> and the <code>?</code> operator</h3>
+  <span class="file-tag">config.rs:64-78</span>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">the ? operator propagates errors</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>fn save_to_path(config: &amp;AppConfig, config_path: &amp;Path) -&gt; std::io::Result&lt;()&gt; {
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;   // ? = if this errors, return the error immediately
+    }
+
+    let toml_str = toml::to_string(config)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    //  ^^^^^^^^ convert toml::ser::Error into std::io::Error, then ?
+
+    let tmp_path = config_path.with_extension("toml.tmp");
+    fs::write(&amp;tmp_path, &amp;toml_str)?;  // ? again
+    fs::rename(&amp;tmp_path, config_path)?;
+
+    Ok(())  // success! return the "empty" Ok
+}</code></pre>
+
+  <h3><code>Option&lt;T&gt;</code> &mdash; nullable values without null</h3>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>pub letter: Option&lt;char&gt;,       // Some('a') or None
+pub number_tag: Option&lt;u8&gt;,     // Some(1) or None
+
+// Pattern match
+if let Some(letter) = win.letter { /* use letter */ }
+
+// Unwrap with default
+let tag = win.number_tag.unwrap_or(0);
+
+// Map/transform
+let upper: Option&lt;String&gt; = win.letter.map(|c| c.to_uppercase().to_string());</code></pre>
+
+  <h3>Fallback patterns</h3>
+  <span class="file-tag">main.rs:134-140</span>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>let config = match AppConfig::load(&amp;config_dir) {
+    Ok(c) =&gt; c,
+    Err(e) =&gt; {
+        tracing::error!("Config load failed: {}", e);
+        AppConfig::default()    // fall back to defaults on error
+    }
+};
+
+// let _ = ... explicitly ignores errors
+let _ = SetForegroundWindow(hwnd);</code></pre>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 7 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-7" data-chapter="7">
+  <h2><span class="ch-badge">07</span> Collections &amp; Iterators</h2>
+
+  <h3><code>Vec&lt;T&gt;</code> and <code>HashMap&lt;K, V&gt;</code></h3>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>// Vec — growable array
+let mut monitors: Vec&lt;MonitorInfo&gt; = Vec::new();
+let mut buf = vec![0u16; (title_len as usize) + 1]; // vec of zeros
+
+monitors.push(info);                    // append
+monitors.sort_by_key(|m| if m.is_primary { 0 } else { 1 });
+ctx.windows.retain(|w| !own_hwnds.contains(&amp;w.hwnd));  // filter in-place
+
+// HashMap — key-value store
+pub struct SessionTags {
+    tags: HashMap&lt;u8, HWND&gt;,   // number key → window handle
+}
+self.tags.insert(number, hwnd);
+self.tags.get(&amp;number).copied()  // lookup → Option&lt;HWND&gt;</code></pre>
+
+  <h3>Iterator chains</h3>
+  <p>Iterators are Rust's killer feature for data transformation. They're <strong>lazy</strong> &mdash; nothing happens until you "consume" the chain.</p>
+
+  <span class="file-tag">mru_tracker.rs:87-92</span>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">build a HashMap from an iterator</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>let mru_pos: HashMap&lt;isize, usize&gt; = self
+    .order
+    .iter()                          // iterate over Vec&lt;HWND&gt;
+    .enumerate()                     // (index, &amp;hwnd)
+    .map(|(i, &amp;h)| (h.0 as isize, i))  // transform to (isize, usize) pairs
+    .collect();                      // collect into HashMap</code></pre>
+
+  <span class="file-tag">grid_layout.rs:79-93</span>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">generate cells with map + collect</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>let cells = (0..window_count)        // range 0, 1, 2, ...
+    .map(|i| {
+        let row = i / cols;
+        let col = i % cols;
+        let x = PADDING + col as f32 * (cell_width + PADDING);
+        let y = PADDING + row as f32 * (cell_height + PADDING);
+        CellRect { x, y, width: cell_width, height: cell_height, window_index: i }
+    })
+    .collect();                      // collect into Vec&lt;CellRect&gt;</code></pre>
+
+  <table>
+    <tr><th>Method</th><th>What it does</th></tr>
+    <tr><td><code>.iter()</code></td><td>iterate by reference (<code>&amp;T</code>)</td></tr>
+    <tr><td><code>.iter_mut()</code></td><td>iterate by mutable reference (<code>&amp;mut T</code>)</td></tr>
+    <tr><td><code>.into_iter()</code></td><td>iterate by value (consumes the collection)</td></tr>
+    <tr><td><code>.map(fn)</code></td><td>transform each element</td></tr>
+    <tr><td><code>.filter(fn)</code></td><td>keep elements where fn returns true</td></tr>
+    <tr><td><code>.find(fn)</code></td><td>first element where fn returns true</td></tr>
+    <tr><td><code>.position(fn)</code></td><td>index of first match</td></tr>
+    <tr><td><code>.enumerate()</code></td><td>add index: <code>(usize, T)</code></td></tr>
+    <tr><td><code>.collect()</code></td><td>consume iterator, build a collection</td></tr>
+    <tr><td><code>.any(fn)</code></td><td>true if any element matches</td></tr>
+    <tr><td><code>.take(n)</code></td><td>first n elements</td></tr>
+  </table>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 8 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-8" data-chapter="8">
+  <h2><span class="ch-badge">08</span> Closures</h2>
+  <p>Closures are anonymous functions that can capture variables from their environment.</p>
+  <p>Syntax: <code>|params| body</code> or <code>|params| { multi-line body }</code></p>
+
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>// mru_tracker.rs — closure captures mru_pos from outer scope
+windows.sort_by_key(|w| {
+    mru_pos
+        .get(&amp;(w.hwnd.0 as isize))
+        .copied()
+        .unwrap_or(usize::MAX)
+});
+
+// window_enumerator.rs — retain takes a closure
+ctx.windows.retain(|w| {
+    !own_hwnds.contains(&amp;w.hwnd)    // captures own_hwnds
+});
+
+// Closures vs function pointers:
+pub type KeyHandler = fn(vk_code: u32) -&gt; bool;  // fn pointer — no captured variables
+
+let threshold = 100;
+let filter = |x: &amp;i32| *x &gt; threshold;  // closure — captures `threshold`</code></pre>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 9 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-9" data-chapter="9">
+  <h2><span class="ch-badge">09</span> Generics &amp; Type Parameters</h2>
+
+  <h3>In the standard library</h3>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>Vec&lt;WindowInfo&gt;            // Vec is generic over T
+HashMap&lt;u8, HWND&gt;          // HashMap is generic over K, V
+Option&lt;usize&gt;              // Option is generic over T
+Result&lt;(), std::io::Error&gt; // Result is generic over T, E</code></pre>
+
+  <h3><code>as</code> &mdash; type casting</h3>
+  <p>Numeric conversions are explicit in Rust (no implicit widening/narrowing):</p>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>let n = window_count as f32;     // usize → f32
+let cmd = (wparam.0 &amp; 0xFFFF) as u32;  // usize → u32
+let c = (b'a' + (vk - VK_A.0 as u32) as u8) as char;  // chain of casts</code></pre>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 10 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-10" data-chapter="10">
+  <h2><span class="ch-badge">10</span> <code>unsafe</code> Rust &amp; FFI</h2>
+  <p>Your codebase is heavily <code>unsafe</code> because it calls raw Win32 APIs.</p>
+
+  <div class="callout warning">
+    <div class="callout-title">What unsafe means</div>
+    <p><code>unsafe</code> does NOT mean "bad code." It means: <em>"I, the programmer, am manually guaranteeing invariants that the compiler can't verify."</em></p>
+    <p>It unlocks: (1) Dereference raw pointers, (2) Call unsafe functions, (3) Access mutable statics, (4) Implement unsafe traits, (5) Access union fields.</p>
+  </div>
+
+  <h3>Raw pointers &amp; dereferencing</h3>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>// main.rs:88 — getting a raw pointer
+fn get_app_state() -&gt; *mut AppState {
+    APP_STATE_PTR.load(std::sync::atomic::Ordering::Relaxed) as *mut AppState
+}
+
+// main.rs:306 — dereferencing it
+unsafe {
+    let app = &amp;mut *app_ptr;  // raw pointer → mutable reference
+}</code></pre>
+
+  <h3>Win32 callbacks</h3>
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">main.rs:296 — extern "system" calling convention</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>unsafe extern "system" fn main_wndproc(
+    hwnd: HWND,     // unsafe — called by Windows directly
+    msg: u32,       // extern "system" — Windows calling convention
+    wparam: WPARAM, // must match the exact signature Windows expects
+    lparam: LPARAM,
+) -&gt; LRESULT {</code></pre>
+
+  <h3>Callback context via LPARAM</h3>
+  <span class="file-tag">window_enumerator.rs:39-51</span>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>let ctx_ptr = &amp;mut ctx as *mut EnumContext;  // Rust struct → raw pointer
+
+unsafe {
+    let _ = EnumWindows(
+        Some(enum_windows_callback),  // function pointer to our callback
+        LPARAM(ctx_ptr as isize),     // context packed as integer
+    );
+}
+
+// In the callback — unpack integer → pointer → reference:
+unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -&gt; BOOL {
+    let ctx = &amp;mut *(lparam.0 as *mut EnumContext);
+}</code></pre>
+
+  <h3><code>transmute</code> &amp; <code>forget</code></h3>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>// keyboard_hook.rs:115 — reinterpret cast (extremely dangerous)
+let handler: KeyHandler = std::mem::transmute(handler_ptr);
+
+// logging.rs:58 — prevent Drop from running (intentional leak)
+std::mem::forget(_guard);</code></pre>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 11 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-11" data-chapter="11">
+  <h2><span class="ch-badge">11</span> Smart Pointers &amp; Memory Layout</h2>
+
+  <h3><code>Box&lt;T&gt;</code> &mdash; heap allocation</h3>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>let mut app_state = Box::new(AppState { ... });
+// Box::new() allocates on the HEAP (not the stack)
+// 1. AppState is too large for comfortable stack usage
+// 2. We need a stable pointer — stack addresses change; heap addresses don't</code></pre>
+
+  <h3>Stack vs Heap</h3>
+  <div class="diagram">
+    <pre><code>Stack (fast, automatic)          Heap (slower, manual/Box)
+┌────────────────────┐           ┌────────────────────┐
+│ vk_code: u32       │           │ AppState {         │
+│ result: KeyAction  │           │   config: ...      │
+│ idx: usize         │           │   overlay_state    │
+└────────────────────┘           │   window_snapshot  │
+  (freed when fn returns)        │   ...              │
+                                 └────────────────────┘
+                                   (freed when Box is dropped)</code></pre>
+  </div>
+
+  <h3><code>Vec&lt;T&gt;</code> internals</h3>
+  <div class="diagram">
+    <pre><code>Stack: Vec&lt;WindowInfo&gt;         Heap:
+┌──────────────┐               ┌──────────────────┐
+│ ptr ─────────────────────── → │ WindowInfo[0]    │
+│ len: 5       │               │ WindowInfo[1]    │
+│ capacity: 8  │               │ WindowInfo[2]    │
+└──────────────┘               │ WindowInfo[3]    │
+                               │ WindowInfo[4]    │
+                               │ (unused) [5..7]  │
+                               └──────────────────┘</code></pre>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 12 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-12" data-chapter="12">
+  <h2><span class="ch-badge">12</span> Concurrency Primitives</h2>
+  <p>Your codebase uses concurrency primitives in a single-threaded context. This is unusual but intentional &mdash; it avoids <code>static mut</code> (which is unsound in Rust 2024).</p>
+
+  <h3><code>AtomicUsize</code> &amp; <code>AtomicBool</code></h3>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>// main.rs:83 — AtomicUsize instead of static mut
+static APP_STATE_PTR: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+// Why? AtomicUsize is Send + Sync (safe in statics). static mut is unsound.
+
+// keyboard_hook.rs:21 — AtomicBool for on/off flag
+static HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_active(active: bool) {
+    HOOK_ACTIVE.store(active, Ordering::Relaxed);
+}
+// Ordering::Relaxed = "no sync guarantees beyond atomicity"
+// Fine for single-thread — no other thread to sync with.</code></pre>
+
+  <h3><code>OnceLock</code> &amp; <code>unsafe impl Send + Sync</code></h3>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>// mru_tracker.rs:129 — write-once global
+static MRU_TRACKER_CELL: std::sync::OnceLock&lt;SendPtr&gt; = std::sync::OnceLock::new();
+
+// Raw pointers are neither Send nor Sync by default.
+// Here, the programmer manually asserts single-thread safety:
+struct SendPtr(*mut MruTracker);
+unsafe impl Send for SendPtr {}
+unsafe impl Sync for SendPtr {}</code></pre>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 13 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-13" data-chapter="13">
+  <h2><span class="ch-badge">13</span> Testing</h2>
+
+  <h3>Test structure</h3>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>#[cfg(test)]    // only compile this module during `cargo test`
+mod tests {
+    use super::*;  // import everything from the parent module
+
+    #[test]    // marks this function as a test
+    fn test_fade_in_reaches_max() {
+        let mut anim = FadeAnimator::new();
+        anim.start_fade_in();
+        assert!(anim.is_animating());      // panic if false
+
+        let mut ticks = 0;
+        while anim.tick() {
+            ticks += 1;
+            assert!(ticks &lt; 20, "Fade-in should complete within 20 ticks");
+        }
+        assert_eq!(anim.current_alpha, ALPHA_MAX);  // assert equality
+    }
+}</code></pre>
+
+  <h3>Test helpers</h3>
+  <pre><div class="code-header"><span class="lang">rust</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>// Create fake HWNDs for testing
+fn hwnd(n: isize) -&gt; HWND {
+    HWND(n as *mut _)
+}
+
+// Create test WindowInfo with a letter
+fn make_window_info(hwnd_n: isize, letter: char) -&gt; WindowInfo {
+    let mut w = WindowInfo::new(hwnd(hwnd_n), format!("Window {}", hwnd_n), false, 0);
+    w.letter = Some(letter);
+    w
+}</code></pre>
+
+  <h3>Testable vs Win32-coupled</h3>
+  <table>
+    <tr><th>File</th><th>Win32 dependency</th><th>Tests</th></tr>
+    <tr><td><code>grid_layout.rs</code></td><td>None</td><td>8 tests</td></tr>
+    <tr><td><code>animation.rs</code></td><td>None</td><td>5 tests</td></tr>
+    <tr><td><code>interaction.rs</code></td><td>Minimal</td><td>15+ tests</td></tr>
+    <tr><td><code>letter_assignment.rs</code></td><td>None</td><td>6 tests</td></tr>
+    <tr><td><code>overlay.rs</code></td><td>Heavy</td><td>Manual only</td></tr>
+  </table>
+
+  <pre><div class="code-header"><span class="lang">bash</span></div><code>cargo test                          # all tests
+cargo test config::tests            # only config module tests
+cargo test -- --test-threads=1      # if tests share Win32 state
+cargo test -- --nocapture           # show println! output</code></pre>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 14 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-14" data-chapter="14">
+  <h2><span class="ch-badge">14</span> Design Patterns</h2>
+
+  <details open>
+    <summary>Pattern 1: State Machine</summary>
+    <div class="detail-body">
+      <div class="diagram">
+        <pre><code>         ┌──────────────────────────────────┐
+         │                                  │
+         ▼                                  │
+      Hidden ──hotkey──→ FadingIn ──done──→ Active
+         ▲                   │               │
+         │                   │ (dismiss)     │ (escape / select+enter)
+         │                   ▼               ▼
+         └───────────── FadingOut ◄──────────┘
+                           │
+                           │ done + target?
+                           ▼
+                    switch_to_window()</code></pre>
+      </div>
+      <p><code>state.rs</code> defines the enum. <code>main.rs</code> checks it before every action.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Pattern 2: RAII (Resource Acquisition Is Initialization)</summary>
+    <div class="detail-body">
+      <p>Resources are tied to object lifetimes. When the object is dropped, the resource is released.</p>
+      <table>
+        <tr><th>Resource</th><th>Type</th><th>Cleanup in <code>Drop</code></th></tr>
+        <tr><td>DWM thumbnail</td><td><code>ThumbnailHandle</code></td><td><code>DwmUnregisterThumbnail</code></td></tr>
+        <tr><td>WinEvent hook</td><td><code>MruTracker</code></td><td><code>UnhookWinEvent</code></td></tr>
+        <tr><td>Thread attachment</td><td><code>ThreadInputGuard</code></td><td><code>AttachThreadInput(false)</code></td></tr>
+      </table>
+    </div>
+  </details>
+
+  <details>
+    <summary>Pattern 3: Callback Context via Raw Pointer</summary>
+    <div class="detail-body">
+      <p>Win32 callbacks don't support closures. The pattern is:</p>
+      <ol>
+        <li>Create a context struct</li>
+        <li>Cast its pointer to <code>LPARAM</code> (integer)</li>
+        <li>In the callback, cast <code>LPARAM</code> back to a pointer</li>
+      </ol>
+      <p>Used in: <code>window_enumerator.rs</code>, <code>monitor.rs</code>, <code>mru_tracker.rs</code>.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Pattern 4: Global State via Atomic</summary>
+    <div class="detail-body">
+      <p>Instead of <code>static mut</code> (unsound), the codebase uses atomics. The safety invariant: <strong>only the message pump thread accesses these.</strong></p>
+      <pre><div class="code-header"><span class="lang">rust</span></div><code>static APP_STATE_PTR: AtomicUsize = AtomicUsize::new(0);  // main.rs
+static OVERLAY_WNDPROC_PTR: AtomicUsize = ...;             // overlay.rs
+static HOOK_HANDLE: AtomicUsize = ...;                      // keyboard_hook.rs
+static HOOK_ACTIVE: AtomicBool = ...;                       // keyboard_hook.rs
+static MRU_TRACKER_CELL: OnceLock&lt;SendPtr&gt; = ...;          // mru_tracker.rs</code></pre>
+    </div>
+  </details>
+
+  <details>
+    <summary>Pattern 5: Command Pattern</summary>
+    <div class="detail-body">
+      <p><code>handle_key_down()</code> returns a <code>KeyAction</code> enum instead of performing the action directly. This separates <strong>decision</strong> from <strong>execution</strong>:</p>
+      <div class="diagram">
+        <pre><code>Input (vk_code) → handle_key_down() → KeyAction::Select(3)
+                                            ↓
+                                    main.rs match block → actually updates state</code></pre>
+      </div>
+      <p>Benefits: <code>handle_key_down()</code> is testable (returns a value, doesn't mutate global state). The caller decides HOW to execute.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Pattern 6: Snapshot Pattern</summary>
+    <div class="detail-body">
+      <p>At overlay activation, the entire window list is snapshotted into <code>Vec&lt;WindowInfo&gt;</code>. All subsequent operations work on this snapshot &mdash; not live Win32 state. This prevents windows appearing/disappearing mid-interaction.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Pattern 7: Layered Windows (Two-HWND Rendering)</summary>
+    <div class="detail-body">
+      <div class="diagram">
+        <pre><code>Z-order (top to bottom):
+┌─────────────────────────────┐
+│ Label Overlay (GDI)         │  ← letter badges, number tags
+│  WS_EX_TRANSPARENT          │    click-through, color-keyed
+├─────────────────────────────┤
+│ DWM Thumbnails              │  ← live window previews
+│  (composited by Windows)     │    rendered above the D2D surface
+├─────────────────────────────┤
+│ Primary Overlay (Direct2D)   │  ← backdrop, cell backgrounds, aura glow
+│  WS_EX_LAYERED              │    alpha-blended
+└─────────────────────────────┘</code></pre>
+      </div>
+    </div>
+  </details>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 15 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-15" data-chapter="15">
+  <h2><span class="ch-badge">15</span> Cargo &amp; Dependencies</h2>
+
+  <pre><div class="code-header"><span class="lang">toml</span><span class="file-ref">Cargo.toml</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>[package]
+name = "window-selector"       # crate name (becomes window_selector in code)
+version = "0.1.0"
+edition = "2021"                # Rust edition (affects syntax/features available)
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }   # serialization framework
+toml = "0.8"                                        # TOML parser (for config)
+tracing = "0.1"                                     # structured logging
+
+[dependencies.windows]          # Microsoft's official Win32 bindings
+version = "0.58"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",       # DWM thumbnail APIs
+    "Win32_Graphics_Direct2D",  # 2D rendering
+]
+
+[profile.release]
+opt-level = 3        # maximum optimization
+lto = true           # link-time optimization (slower build, faster binary)
+codegen-units = 1    # compile as single unit (better optimization)</code></pre>
+
+  <pre><div class="code-header"><span class="lang">bash</span><span class="file-ref">Key commands</span></div><code>cargo build                  # debug build → target/debug/
+cargo build --release        # release build → target/release/
+cargo test                   # compile + run all #[test] functions
+cargo clippy                 # linter — catches common mistakes
+cargo doc --open             # generate + open API docs in browser
+cargo run -- --debug         # run with CLI args</code></pre>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHAPTER 16 -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-16" data-chapter="16">
+  <h2><span class="ch-badge">16</span> Reading Order: Where to Start</h2>
+
+  <h3>Tier 1: Pure Rust, no Win32 <em>(start here)</em></h3>
+  <table>
+    <tr><th>File</th><th>Concepts</th><th>Lines</th></tr>
+    <tr><td><code>window_info.rs</code></td><td>Structs, Option, derive macros</td><td>26</td></tr>
+    <tr><td><code>letter_assignment.rs</code></td><td>Arrays, iterators, tests</td><td>106</td></tr>
+    <tr><td><code>animation.rs</code></td><td>Enums, state mutation, saturating math</td><td>163</td></tr>
+    <tr><td><code>grid_layout.rs</code></td><td>Functions, f32 math, iterators, tests</td><td>269</td></tr>
+    <tr><td><code>accent_color.rs</code></td><td>Small struct, methods, one unsafe call</td><td>73</td></tr>
+  </table>
+
+  <h3>Tier 2: Logic with light Win32 dependency</h3>
+  <table>
+    <tr><th>File</th><th>Concepts</th><th>Lines</th></tr>
+    <tr><td><code>state.rs</code></td><td>Enums with data, HashMap, pattern matching, tests</td><td>176</td></tr>
+    <tr><td><code>interaction.rs</code></td><td>Command pattern, match, Option chaining, tests</td><td>477</td></tr>
+    <tr><td><code>config.rs</code></td><td>Serde, file I/O, Result, ? operator, atomic writes</td><td>165</td></tr>
+    <tr><td><code>hotkey.rs</code></td><td>Small Win32 wrappers, string formatting</td><td>109</td></tr>
+    <tr><td><code>logging.rs</code></td><td>Trait composition, builder pattern, mem::forget</td><td>84</td></tr>
+  </table>
+
+  <h3>Tier 3: Win32 integration</h3>
+  <table>
+    <tr><th>File</th><th>Concepts</th><th>Lines</th></tr>
+    <tr><td><code>monitor.rs</code></td><td>Callback pattern, pointer casting</td><td>95</td></tr>
+    <tr><td><code>mru_tracker.rs</code></td><td>MRU data structure, WinEvent hook, OnceLock, Drop</td><td>201</td></tr>
+    <tr><td><code>window_enumerator.rs</code></td><td>EnumWindows callback, filtering, snapshot</td><td>233</td></tr>
+    <tr><td><code>window_switcher.rs</code></td><td>RAII guard, focus transfer strategies</td><td>112</td></tr>
+    <tr><td><code>keyboard_hook.rs</code></td><td>Low-level hook, AtomicBool, function pointers</td><td>127</td></tr>
+    <tr><td><code>tray.rs</code></td><td>System tray, popup menus, UTF-16 encoding</td><td>151</td></tr>
+  </table>
+
+  <h3>Tier 4: Rendering &amp; orchestration</h3>
+  <table>
+    <tr><th>File</th><th>Concepts</th><th>Lines</th></tr>
+    <tr><td><code>dwm_thumbnails.rs</code></td><td>DWM API, aspect ratio math, Drop for cleanup</td><td>238</td></tr>
+    <tr><td><code>overlay.rs</code></td><td>Window creation, Z-order management, animation</td><td>457</td></tr>
+    <tr><td><code>overlay_renderer.rs</code></td><td>Direct2D, DirectWrite, GPU resource management</td><td>661</td></tr>
+    <tr><td><code>main.rs</code></td><td>Entry point, message loop, wndproc, all orchestration</td><td>730</td></tr>
+  </table>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CHEAT SHEET (not a numbered chapter) -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-cheatsheet" data-chapter="cheatsheet">
+  <h2><span class="ch-badge" style="background:var(--amber);color:#000">REF</span> Rust Syntax Cheat Sheet</h2>
+
+  <pre><div class="code-header"><span class="lang">rust</span><span class="file-ref">quick reference</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><code>// Variables
+let x = 5;              // immutable
+let mut y = 10;          // mutable
+let z: u32 = 42;        // explicit type
+
+// Functions
+fn add(a: i32, b: i32) -&gt; i32 { a + b }  // last expression = return value
+
+// String types
+let s: &amp;str = "hello";        // string slice (borrowed, immutable)
+let s: String = "hello".to_string();  // owned String (heap allocated)
+let s: String = format!("hello {}", name);  // formatted
+
+// If/else (is an expression!)
+let msg = if x &gt; 0 { "positive" } else { "non-positive" };
+
+// Loop variants
+loop { break; }                    // infinite loop
+while condition { }                // conditional loop
+for item in collection { }        // iterator loop
+for i in 0..10 { }                // range loop (0 to 9)
+for (i, item) in v.iter().enumerate() { }  // with index
+
+// Turbofish ::&lt;T&gt; — specify generic type explicitly
+let v = Vec::&lt;i32&gt;::new();
+let n = "42".parse::&lt;u32&gt;().unwrap();
+
+// Macros (end with !)
+println!("hello");     vec![1,2,3];     assert_eq!(a, b);
+format!("x={}", x);   tracing::info!("msg");
+
+// Attributes
+#[derive(Debug)]       // auto-implement traits
+#[allow(dead_code)]    // suppress "unused" warnings
+#[cfg(test)]           // only compile in test builds
+#[test]                // marks a test function
+#[inline]              // suggest inlining</code></pre>
+</section>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- EXERCISES -->
+<!-- ══════════════════════════════════════════════ -->
+<section class="chapter" id="ch-exercises" data-chapter="exercises">
+  <h2><span class="ch-badge" style="background:var(--green);color:#000">LAB</span> Exercises</h2>
+  <p>Try these after reading the codebase:</p>
+
+  <div class="exercise" data-num="Exercise 1">
+    <h4>Add a new letter sequence</h4>
+    <p>Edit <code>letter_assignment.rs</code> to use a different key layout (e.g., Dvorak home row). Run <code>cargo test letter_assignment</code> to verify.</p>
+  </div>
+
+  <div class="exercise" data-num="Exercise 2">
+    <h4>Add a "window count" display</h4>
+    <p>In <code>overlay_renderer.rs</code>, add text showing "5 windows" in the top-right corner. Use the existing <code>text_brush</code> and <code>title_format</code>.</p>
+  </div>
+
+  <div class="exercise" data-num="Exercise 3">
+    <h4>Make fade duration configurable</h4>
+    <p>Add a <code>fade_duration_ms: u32</code> field to <code>AppConfig</code>, then use it in <code>animation.rs</code> to compute <code>ALPHA_DELTA</code> dynamically.</p>
+  </div>
+
+  <div class="exercise" data-num="Exercise 4">
+    <h4>Add a test</h4>
+    <p>Write a test in <code>grid_layout.rs</code> that verifies 3 windows produce a 2x2 grid (2 cols, 2 rows). Follow the existing test style.</p>
+  </div>
+
+  <div class="exercise" data-num="Exercise 5">
+    <h4>Implement a "close window" action</h4>
+    <p>Add a <code>KeyAction::Close(HWND)</code> variant triggered by pressing Delete while a window is selected. Modify <code>interaction.rs</code> and <code>main.rs</code>.</p>
+  </div>
+</section>
+
+</main>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// TOC GENERATION
+// ═══════════════════════════════════════════════════════
+const chapters = [
+  {id:'ch-1',num:'01',title:'Project Structure & Module System'},
+  {id:'ch-2',num:'02',title:'Ownership, Borrowing & Lifetimes'},
+  {id:'ch-3',num:'03',title:'Structs & Methods'},
+  {id:'ch-4',num:'04',title:'Enums & Pattern Matching'},
+  {id:'ch-5',num:'05',title:'Traits & Polymorphism'},
+  {id:'ch-6',num:'06',title:'Error Handling'},
+  {id:'ch-7',num:'07',title:'Collections & Iterators'},
+  {id:'ch-8',num:'08',title:'Closures'},
+  {id:'ch-9',num:'09',title:'Generics & Type Parameters'},
+  {id:'ch-10',num:'10',title:'unsafe Rust & FFI'},
+  {id:'ch-11',num:'11',title:'Smart Pointers & Memory'},
+  {id:'ch-12',num:'12',title:'Concurrency Primitives'},
+  {id:'ch-13',num:'13',title:'Testing'},
+  {id:'ch-14',num:'14',title:'Design Patterns'},
+  {id:'ch-15',num:'15',title:'Cargo & Dependencies'},
+  {id:'ch-16',num:'16',title:'Reading Order'},
+  {id:'ch-cheatsheet',num:'REF',title:'Syntax Cheat Sheet'},
+  {id:'ch-exercises',num:'LAB',title:'Exercises'},
+];
+
+const toc = document.getElementById('toc');
+chapters.forEach(ch => {
+  const a = document.createElement('a');
+  a.href = '#' + ch.id;
+  a.dataset.target = ch.id;
+  a.innerHTML = `<span class="ch-check" id="check-${ch.id}"></span><span class="ch-num">${ch.num}</span>${ch.title}`;
+  toc.appendChild(a);
+});
+
+// ═══════════════════════════════════════════════════════
+// SCROLL SPY + PROGRESS + READING TRACKER
+// ═══════════════════════════════════════════════════════
+const readChapters = new Set(JSON.parse(localStorage.getItem('rustforge-read')||'[]'));
+
+function updateReadUI(){
+  let count = 0;
+  chapters.forEach(ch => {
+    const el = document.getElementById('check-'+ch.id);
+    if(readChapters.has(ch.id)){
+      el.classList.add('done');
+      el.textContent = '\u2713';
+      count++;
+    }
+  });
+  document.getElementById('done-count').textContent = count;
+  localStorage.setItem('rustforge-read',JSON.stringify([...readChapters]));
+}
+updateReadUI();
+
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if(e.isIntersecting){
+      e.target.classList.add('visible');
+      const chId = e.target.id;
+      if(chId && e.intersectionRatio > 0.3){
+        readChapters.add(chId);
+        updateReadUI();
+      }
+      // Active TOC link
+      document.querySelectorAll('#toc a').forEach(a => a.classList.remove('active'));
+      const link = document.querySelector(`#toc a[data-target="${chId}"]`);
+      if(link) {
+        link.classList.add('active');
+        link.scrollIntoView({block:'nearest'});
+      }
+    }
+  });
+},{threshold:[0.1,0.3],rootMargin:'-60px 0px -40% 0px'});
+
+document.querySelectorAll('.chapter').forEach(ch => observer.observe(ch));
+
+// Progress bar
+window.addEventListener('scroll',()=>{
+  const h = document.documentElement.scrollHeight - window.innerHeight;
+  const pct = h > 0 ? (window.scrollY / h) * 100 : 0;
+  document.documentElement.style.setProperty('--progress', pct);
+},{passive:true});
+
+// ═══════════════════════════════════════════════════════
+// MOBILE SIDEBAR TOGGLE
+// ═══════════════════════════════════════════════════════
+document.getElementById('menu-toggle').addEventListener('click',()=>{
+  document.getElementById('sidebar').classList.toggle('open');
+});
+document.querySelectorAll('#toc a').forEach(a=>{
+  a.addEventListener('click',()=>{
+    document.getElementById('sidebar').classList.remove('open');
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// COPY CODE BUTTON
+// ═══════════════════════════════════════════════════════
+function copyCode(btn){
+  const code = btn.closest('pre').querySelector('code');
+  navigator.clipboard.writeText(code.textContent).then(()=>{
+    btn.textContent = 'copied!';
+    btn.classList.add('copied');
+    setTimeout(()=>{btn.textContent='copy';btn.classList.remove('copied')},1500);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// SYNTAX HIGHLIGHTING (lightweight Rust tokenizer)
+// ═══════════════════════════════════════════════════════
+function highlightRust(code){
+  // Escape HTML first (already escaped in content, so skip re-escaping entities)
+  let s = code;
+
+  // Order matters — comments first, then strings, then keywords
+  // Comments
+  s = s.replace(/(\/\/[^\n]*)/g,'<span class="hl-cm">$1</span>');
+  s = s.replace(/(\/\*[\s\S]*?\*\/)/g,'<span class="hl-cm">$1</span>');
+
+  // Strings
+  s = s.replace(/(&quot;[^&]*?&quot;|"[^"]*?")/g,'<span class="hl-str">$1</span>');
+
+  // Attributes
+  s = s.replace(/(#\[[\w:()=, ]*?\])/g,'<span class="hl-attr">$1</span>');
+
+  // Macros
+  s = s.replace(/\b(\w+!)\s*(?=[\({])/g,'<span class="hl-mac">$1</span>');
+  s = s.replace(/\b(tracing::\w+!)/g,'<span class="hl-mac">$1</span>');
+
+  // Keywords
+  const kws = 'fn|let|mut|pub|use|mod|struct|enum|impl|match|if|else|for|while|loop|break|continue|return|where|in|as|ref|move|unsafe|extern|static|const|crate|super|self|Self|type|trait|true|false|Some|None|Ok|Err|async|await|dyn|box|drop';
+  s = s.replace(new RegExp('\\b('+kws+')\\b','g'), (m,p1)=>{
+    // Don't highlight inside already-highlighted spans
+    if(p1==='true'||p1==='false') return '<span class="hl-bool">'+p1+'</span>';
+    if(p1==='self'||p1==='Self') return '<span class="hl-self">'+p1+'</span>';
+    return '<span class="hl-kw">'+p1+'</span>';
+  });
+
+  // Types (capitalized words)
+  s = s.replace(/\b([A-Z][A-Za-z0-9_]*)\b/g, (m,p1)=>{
+    // Skip if already inside a span or is a keyword we already highlighted
+    const skipTypes = ['WM_CREATE','WM_DESTROY','WM_HOTKEY','WM_TIMER','WM_ACTIVATE','WM_PAINT','WM_KEYDOWN','WM_SYSKEYDOWN','WM_COMMAND','WM_LBUTTONDOWN','WM_RBUTTONDOWN','PADDING','ALPHA_MAX','ALPHA_MIN','ALPHA_DELTA','MRU_MAX_SIZE','HOTKEY_ID','FADE_TIMER_ID','HC_ACTION','MENU_SETTINGS','MENU_ABOUT','MENU_EXIT','MENU_DIRECT_SWITCH'];
+    if(skipTypes.includes(p1)) return '<span class="hl-num">'+p1+'</span>';
+    return '<span class="hl-ty">'+p1+'</span>';
+  });
+
+  // Numbers
+  s = s.replace(/\b(\d[\d_.]*(?:u8|u16|u32|u64|usize|i8|i16|i32|i64|isize|f32|f64)?)\b/g,'<span class="hl-num">$1</span>');
+  s = s.replace(/(0x[0-9a-fA-F_]+)/g,'<span class="hl-num">$1</span>');
+
+  // Function calls
+  s = s.replace(/\b([a-z_][a-z0-9_]*)\s*(?=\()/g,'<span class="hl-fn">$1</span>');
+
+  // Lifetime annotations
+  s = s.replace(/('(?:static|[a-z]))\b/g,'<span class="hl-life">$1</span>');
+
+  return s;
+}
+
+// Apply highlighting to all code blocks
+document.querySelectorAll('pre code').forEach(block => {
+  const lang = block.closest('pre').querySelector('.lang');
+  if(lang && (lang.textContent === 'rust' || lang.textContent === 'RUST')){
+    block.innerHTML = highlightRust(block.innerHTML);
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+// i18n — ENGLISH / TRADITIONAL CHINESE TOGGLE
+// ═══════════════════════════════════════════════════════
+
+// Auto-assign data-i18n keys to all translatable elements on first load
+(function initI18n(){
+  let idx = 0;
+  const walkSelectors = [
+    '#hero .overline','#hero h1','#hero .lead',
+    '.stat-label',
+    '#sidebar-footer .progress-text',
+    '.chapter > h2','.chapter > h3','.chapter > p',
+    '.chapter > ul > li','.chapter > ol > li',
+    '.callout-title','.callout > p','.callout > ul > li',
+    '.detail-body > p','.detail-body > ol > li',
+    'details > summary',
+    '.exercise h4','.exercise > p',
+    '.diagram + p', '.chapter > table caption',
+    '.chapter h3 + p'
+  ];
+  // We use a more targeted approach: walk each section in DOM order
+  const all = document.querySelectorAll(
+    '#hero .overline, #hero > h1, #hero .lead, .stat-label,'+
+    ' .chapter h2, .chapter h3, .chapter > p,'+
+    ' .chapter > ul > li, .chapter > ol > li,'+
+    ' .callout-title, .callout > p, .callout > ul > li,'+
+    ' .detail-body > p, .detail-body > ol > li, .detail-body > table td,'+
+    ' details > summary, .exercise h4, .exercise > p'
+  );
+  all.forEach(el => {
+    if(!el.dataset.i18n && !el.closest('pre') && !el.closest('code')){
+      el.dataset.i18n = 't'+idx;
+      idx++;
+    }
+  });
+  // Also mark sidebar items
+  document.querySelectorAll('[data-i18n="sidebar-title"],[data-i18n="sidebar-subtitle"]').forEach(()=>{});
+})();
+
+// Store original English content
+const enStore = {};
+document.querySelectorAll('[data-i18n]').forEach(el => {
+  enStore[el.dataset.i18n] = el.innerHTML;
+});
+
+// ─── Traditional Chinese translations keyed by data-i18n auto-IDs ───
+// Built by walking the DOM in order. Each t0, t1, t2... matches the
+// sequential order that elements appear in the page.
+const zhTW = {
+  // Sidebar
+  'sidebar-title': 'Rust \u935b\u9020\u574a',
+  'sidebar-subtitle': 'window-selector \u7a0b\u5f0f\u78bc\u5c0e\u89bd',
+  // Hero
+  't0': '// \u5be6\u4f5c\u5c0e\u5411\u7684 Rust \u8ab2\u7a0b',
+  't1': '\u900f\u904e<br><em>window-selector</em><br>\u5b78\u7fd2 Rust',
+  't2': '\u6bcf\u500b\u7bc4\u4f8b\u90fd\u4f86\u81ea\u4f60\u81ea\u5df1\u7684\u7a0b\u5f0f\u78bc\u3002\u6c92\u6709\u73a9\u5177\u5c08\u6848\uff0c\u6c92\u6709\u4eba\u9020\u7df4\u7fd2 &mdash; \u53ea\u6709\u4f60\u5be6\u969b\u4ea4\u4ed8\u7684\u6a21\u5f0f\u3002',
+  't3': '\u7ae0\u7bc0', 't4': '\u539f\u59cb\u78bc\u6a94\u6848', 't5': '\u6e2c\u8a66\u901a\u904e', 't6': '\u8a2d\u8a08\u6a21\u5f0f',
+};
+
+// Chapter 1 — Project Structure & Module System
+Object.assign(zhTW, buildChapterZh(1, {
+  title: '\u5c08\u6848\u7d50\u69cb\u8207\u6a21\u7d44\u7cfb\u7d71',
+  h3s: ['Rust \u5982\u4f55\u7d44\u7e54\u7a0b\u5f0f\u78bc', '\u53ef\u898b\u6027\uff1a<code>pub</code> vs \u79c1\u6709', '<code>use</code> \u532f\u5165', '<code>pub(crate)</code> &mdash; \u50c5\u5728 crate \u5167\u53ef\u898b'],
+  ps: [
+    'Rust \u4f7f\u7528\u4ee5 <code>main.rs</code>\uff08\u4e8c\u9032\u4f4d\u6a94\uff09\u6216 <code>lib.rs</code>\uff08\u51fd\u5f0f\u5eab\uff09\u70ba\u6839\u7684<strong>\u6a21\u7d44\u6a39</strong>\u3002<code>src/</code> \u4e2d\u7684\u6bcf\u500b <code>.rs</code> \u6a94\u6848\u90fd\u662f\u4e00\u500b\u6a21\u7d44\uff0c\u4f46\u5fc5\u9808\u7528 <code>mod</code> \u5ba3\u544a\u624d\u80fd\u6210\u70ba\u7a0b\u5f0f\u7684\u4e00\u90e8\u5206\u3002',
+    '\u6bcf\u500b <code>mod foo;</code> \u544a\u8a34\u7de8\u8b6f\u5668\uff1a<em>\u300c\u8f09\u5165 <code>src/foo.rs</code> \u4e26\u5c07\u5176\u4f5c\u70ba main \u7684\u5b50\u6a21\u7d44\u3002\u300d</em>\u6c92\u6709\u9019\u500b\u5ba3\u544a\uff0c\u6a94\u6848\u6703\u88ab<strong>\u5ffd\u7565</strong> &mdash; \u5373\u4f7f\u5b83\u5b58\u5728\u65bc\u78c1\u789f\u4e0a\u3002',
+    '\u9810\u8a2d\u60c5\u6cc1\u4e0b\uff0cRust \u4e2d\u7684\u6240\u6709\u6771\u897f\u90fd\u662f<strong>\u79c1\u6709\u7684</strong>\u3002\u8981\u5f9e\u5176\u4ed6\u6a21\u7d44\u4f7f\u7528\u67d0\u6771\u897f\uff0c\u8acb\u6a19\u8a18\u70ba <code>pub</code>\u3002',
+    '<code>use</code> \u5c07\u9805\u76ee\u5e36\u5165\u4f5c\u7528\u57df\uff0c\u9019\u6a23\u4f60\u5c31\u4e0d\u7528\u6bcf\u6b21\u90fd\u5beb\u5b8c\u6574\u8def\u5f91\u3002',
+    '\u4f60\u6709\u6642\u6703\u770b\u5230 <code>pub(crate)</code>\uff0c\u610f\u601d\u662f\u300c\u5c0d\u6b64 crate \u5167\u7684\u5176\u4ed6\u6a21\u7d44\u516c\u958b\uff0c\u4f46\u5c0d\u5916\u90e8\u4f7f\u7528\u8005\u4e0d\u516c\u958b\u300d\u3002\u7531\u65bc\u9019\u662f\u4e00\u500b\u4e8c\u9032\u4f4d\u6a94\uff08\u4e0d\u662f\u51fd\u5f0f\u5eab\uff09\uff0c<code>pub</code> \u548c <code>pub(crate)</code> \u5728\u529f\u80fd\u4e0a\u662f\u76f8\u540c\u7684\u3002',
+  ],
+  callouts: [{title: '\u91cd\u8981\u8a9e\u6cd5', items: [
+    '<code>crate::</code> &mdash; \u5f9e\u5c08\u6848\u6839\u958b\u59cb',
+    '<code>super::</code> &mdash; \u5f80\u4e0a\u4e00\u500b\u6a21\u7d44\uff08\u7236\u7d1a\uff09',
+    '<code>self::</code> &mdash; \u76ee\u524d\u6a21\u7d44\uff08\u5f88\u5c11\u4f7f\u7528\uff09',
+    '<code>use X as Y</code> &mdash; \u532f\u5165\u6642\u91cd\u65b0\u547d\u540d',
+  ]}],
+}));
+
+// Chapter 2 — Ownership, Borrowing & Lifetimes
+Object.assign(zhTW, buildChapterZh(2, {
+  title: '\u6240\u6709\u6b0a\u3001\u501f\u7528\u8207\u751f\u547d\u9031\u671f',
+  h3s: ['\u79fb\u52d5\u8a9e\u7fa9', '\u501f\u7528\uff1a<code>&amp;</code> \u548c <code>&amp;mut</code>', '\u501f\u7528\u6aa2\u67e5\u5668\u5be6\u6230', 'Clone vs Copy', '\u751f\u547d\u9031\u671f\uff08\u7c21\u4ecb\uff09'],
+  ps: [
+    '\u9019\u662f Rust \u7684\u6838\u5fc3\u5275\u65b0\u3002\u6bcf\u500b\u503c\u6b63\u597d\u6709<strong>\u4e00\u500b\u64c1\u6709\u8005</strong>\u3002\u7576\u64c1\u6709\u8005\u96e2\u958b\u4f5c\u7528\u57df\u6642\uff0c\u503c\u6703\u88ab\u91cb\u653e\uff08freed\uff09\u3002',
+    '\u5982\u679c\u4f60\u5728\u4e2d\u9593\u5617\u8a66 <code>let x = app_state;</code>\uff0c<code>app_state</code> \u6703\u88ab<strong>\u79fb\u52d5</strong>\u5230 <code>x</code>\uff0c\u4e4b\u5f8c\u518d\u4f7f\u7528 <code>app_state</code> \u6703\u662f\u7de8\u8b6f\u932f\u8aa4\u3002',
+    '\u70ba\u4ec0\u9ebc\u7528 <code>&amp;[WindowInfo]</code> \u800c\u4e0d\u662f <code>&amp;Vec&lt;WindowInfo&gt;</code>\uff1f<strong>\u5207\u7247</strong>\uff08<code>&amp;[T]</code>\uff09\u66f4\u9748\u6d3b &mdash; \u5b83\u9069\u7528\u65bc\u4efb\u4f55\u9023\u7e8c\u8cc7\u6599\uff0c\u4e0d\u50c5\u50c5\u662f <code>Vec</code>\u3002\u9019\u662f\u5e38\u898b\u7684 Rust \u6163\u7528\u6cd5\u3002',
+    '\u5728\u4f60\u7684\u7a0b\u5f0f\u78bc\u4e2d\uff0c\u4f60\u81ea\u7136\u5730\u89e3\u6c7a\u4e86\u9019\u500b\u554f\u984c\uff1a',
+    '\u751f\u547d\u9031\u671f\u5728\u7de8\u8b6f\u5668\u7121\u6cd5\u78ba\u5b9a\u5f15\u7528\u6709\u6548\u591a\u4e45\u6642\u51fa\u73fe\u3002\u4f60\u7684\u7a0b\u5f0f\u78bc\u901a\u904e\u4f7f\u7528\u64c1\u6709\u578b\u5225\u548c\u539f\u59cb\u6307\u6a19\u4f86\u907f\u514d\u986f\u5f0f\u751f\u547d\u9031\u671f\u3002\u4f60\u4e3b\u8981\u5728\u7de8\u5beb\u63a5\u53d7\u5f15\u7528\u7684\u6cdb\u578b\u51fd\u6578\u6642\u6703\u9047\u5230\u751f\u547d\u9031\u671f\u3002',
+  ],
+}));
+
+// Chapter 3 — Structs & Methods
+Object.assign(zhTW, buildChapterZh(3, {
+  title: '\u7d50\u69cb\u9ad4\u8207\u65b9\u6cd5',
+  h3s: ['\u5b9a\u7fa9\u7d50\u69cb\u9ad4', '<code>impl</code> \u5340\u584a\uff1a\u65b9\u6cd5\u8207\u95dc\u806f\u51fd\u6578', '<code>&amp;self</code> vs <code>&amp;mut self</code> vs <code>self</code>'],
+  ps: [
+    '\u547c\u53eb\u65b9\u5f0f\uff1a<code>SessionTags::new()</code> &mdash; \u6ce8\u610f <code>::</code> \u8a9e\u6cd5\uff0c\u4e0d\u662f <code>.</code>\u3002',
+  ],
+  callouts: [{title: 'Derive \u5de8\u96c6\u8aaa\u660e', items: [
+    '<code>Debug</code> &mdash; \u555f\u7528 <code>{:?}</code> \u683c\u5f0f\u5316\u8f38\u51fa',
+    '<code>Clone</code> &mdash; \u555f\u7528 <code>.clone()</code>',
+    '<code>Copy</code> &mdash; \u555f\u7528\u96b1\u5f0f\u4f4d\u5143\u8907\u88fd\uff08\u50c5\u9069\u7528\u65bc\u7c21\u55ae\u7684\u5806\u758a\u578b\u5225\uff09',
+    '<code>PartialEq</code> &mdash; \u555f\u7528 <code>==</code> \u6bd4\u8f03',
+  ]}],
+}));
+
+// Chapter 4 — Enums & Pattern Matching
+Object.assign(zhTW, buildChapterZh(4, {
+  title: '\u5217\u8209\u8207\u6a21\u5f0f\u6bd4\u5c0d',
+  h3s: ['\u5b9a\u7fa9\u5217\u8209', '<code>match</code> &mdash; \u7a93\u7aef\u6a21\u5f0f\u6bd4\u5c0d', '\u5728 match \u4e2d\u89e3\u69cb', '<code>if let</code> &amp; <code>matches!</code>'],
+  ps: [
+    'Rust \u7684\u5217\u8209\u662f<strong>\u4ee3\u6578\u8cc7\u6599\u578b\u5225</strong> &mdash; \u6bcf\u500b\u8b8a\u9ad4\u53ef\u4ee5\u651c\u5e36\u4e0d\u540c\u7684\u8cc7\u6599\u3002',
+    '<code>match</code> \u5f37\u5236\u4f60\u8655\u7406\u6bcf\u4e00\u500b\u8b8a\u9ad4\u3002\u5982\u679c\u6f0f\u6389\u4e00\u500b\uff0c\u7de8\u8b6f\u5668\u6703\u5831\u932f\u3002',
+  ],
+}));
+
+// Chapter 5 — Traits & Polymorphism
+Object.assign(zhTW, buildChapterZh(5, {
+  title: '\u7279\u5fb5\u8207\u591a\u578b',
+  h3s: ['\u70ba\u4f60\u7684\u578b\u5225\u5be6\u4f5c <code>impl Trait</code>', '<code>Drop</code> &mdash; \u81ea\u8a02\u89e3\u69cb\u5668\uff08RAII\uff09', 'Derive \u5de8\u96c6\u8207 Serde'],
+  ps: [
+    '\u7279\u5fb5\u662f Rust \u7248\u672c\u7684\u4ecb\u9762 &mdash; \u5b83\u5011\u5b9a\u7fa9\u5171\u4eab\u884c\u70ba\u3002',
+    '\u73fe\u5728 <code>SessionTags::default()</code> \u53ef\u4ee5\u4f7f\u7528\uff0c\u4efb\u4f55\u8981\u6c42 <code>T: Default</code> \u7684\u6cdb\u578b\u7a0b\u5f0f\u78bc\u90fd\u63a5\u53d7 <code>SessionTags</code>\u3002',
+    '\u7576 <code>ThumbnailHandle</code> \u96e2\u958b\u4f5c\u7528\u57df\u6642\uff0cRust \u81ea\u52d5\u547c\u53eb <code>drop()</code>\u3002\u9019\u5c31\u662f <strong>RAII</strong>\uff08\u8cc7\u6e90\u7372\u53d6\u5373\u521d\u59cb\u5316\uff09 &mdash; \u8cc7\u6e90\u6703\u88ab\u78ba\u5b9a\u6027\u5730\u6e05\u7406\u3002',
+  ],
+}));
+
+// Chapter 6 — Error Handling
+Object.assign(zhTW, buildChapterZh(6, {
+  title: '\u932f\u8aa4\u8655\u7406',
+  h3s: ['<code>Result&lt;T, E&gt;</code> \u548c <code>?</code> \u904b\u7b97\u5b50', '<code>Option&lt;T&gt;</code> &mdash; \u6c92\u6709 null \u7684\u53ef\u7a7a\u503c', '\u56de\u9000\u6a21\u5f0f'],
+  ps: [
+    'Rust \u6c92\u6709\u4f8b\u5916\u3002\u932f\u8aa4\u5c31\u662f\u503c\u3002',
+  ],
+}));
+
+// Chapter 7 — Collections & Iterators
+Object.assign(zhTW, buildChapterZh(7, {
+  title: '\u96c6\u5408\u8207\u8fed\u4ee3\u5668',
+  h3s: ['<code>Vec&lt;T&gt;</code> \u548c <code>HashMap&lt;K, V&gt;</code>', '\u8fed\u4ee3\u5668\u93c8'],
+  ps: [
+    '\u8fed\u4ee3\u5668\u662f Rust \u8cc7\u6599\u8f49\u63db\u7684\u6bba\u624b\u529f\u80fd\u3002\u5b83\u5011\u662f<strong>\u61f6\u60f0\u7684</strong> &mdash; \u5728\u4f60\u300c\u6d88\u8cbb\u300d\u93c8\u4e4b\u524d\u4ec0\u9ebc\u90fd\u4e0d\u6703\u767c\u751f\u3002',
+  ],
+}));
+
+// Chapter 8 — Closures
+Object.assign(zhTW, buildChapterZh(8, {
+  title: '\u9589\u5305',
+  h3s: [],
+  ps: [
+    '\u9589\u5305\u662f\u53ef\u4ee5\u6355\u7372\u5176\u74b0\u5883\u4e2d\u8b8a\u6578\u7684\u533f\u540d\u51fd\u6578\u3002',
+    '\u8a9e\u6cd5\uff1a<code>|params| body</code> \u6216 <code>|params| { \u591a\u884c\u5167\u5bb9 }</code>',
+  ],
+}));
+
+// Chapter 9 — Generics
+Object.assign(zhTW, buildChapterZh(9, {
+  title: '\u6cdb\u578b\u8207\u578b\u5225\u53c3\u6578',
+  h3s: ['\u5728\u6a19\u6e96\u5eab\u4e2d', '<code>as</code> &mdash; \u578b\u5225\u8f49\u63db'],
+  ps: [
+    '\u5728 Rust \u4e2d\u6578\u503c\u8f49\u63db\u662f\u986f\u5f0f\u7684\uff08\u6c92\u6709\u96b1\u5f0f\u64f4\u5c55/\u7e2e\u7e2e\uff09\uff1a',
+  ],
+}));
+
+// Chapter 10 — unsafe
+Object.assign(zhTW, buildChapterZh(10, {
+  title: '<code>unsafe</code> Rust \u8207 FFI',
+  h3s: ['\u539f\u59cb\u6307\u6a19\u8207\u89e3\u5f15\u7528', 'Win32 \u56de\u547c', '\u901a\u904e LPARAM \u50b3\u905e\u56de\u547c\u4e0a\u4e0b\u6587', '<code>transmute</code> \u8207 <code>forget</code>'],
+  ps: [
+    '\u4f60\u7684\u7a0b\u5f0f\u78bc\u5927\u91cf\u4f7f\u7528 <code>unsafe</code>\uff0c\u56e0\u70ba\u5b83\u547c\u53eb\u539f\u59cb\u7684 Win32 API\u3002',
+  ],
+}));
+
+// Chapter 11 — Smart Pointers
+Object.assign(zhTW, buildChapterZh(11, {
+  title: '\u667a\u6167\u6307\u6a19\u8207\u8a18\u61b6\u9ad4\u4f48\u5c40',
+  h3s: ['<code>Box&lt;T&gt;</code> &mdash; \u5806\u7a4d\u5206\u914d', '\u5806\u758a vs \u5806\u7a4d', '<code>Vec&lt;T&gt;</code> \u5167\u90e8\u7d50\u69cb'],
+  ps: [],
+}));
+
+// Chapter 12 — Concurrency
+Object.assign(zhTW, buildChapterZh(12, {
+  title: '\u4e26\u884c\u57fa\u5143',
+  h3s: ['<code>AtomicUsize</code> \u8207 <code>AtomicBool</code>', '<code>OnceLock</code> \u8207 <code>unsafe impl Send + Sync</code>'],
+  ps: [
+    '\u4f60\u7684\u7a0b\u5f0f\u78bc\u5728\u55ae\u57f7\u884c\u7dd2\u4e0a\u4e0b\u6587\u4e2d\u4f7f\u7528\u4e26\u884c\u57fa\u5143\u3002\u9019\u5f88\u4e0d\u5c0b\u5e38\u4f46\u662f\u523b\u610f\u7684 &mdash; \u5b83\u907f\u514d\u4e86 <code>static mut</code>\uff08\u5728 Rust 2024 \u4e2d\u88ab\u8a8d\u70ba\u4e0d\u5b89\u5168\uff09\u3002',
+  ],
+}));
+
+// Chapter 13 — Testing
+Object.assign(zhTW, buildChapterZh(13, {
+  title: '\u6e2c\u8a66',
+  h3s: ['\u6e2c\u8a66\u7d50\u69cb', '\u6e2c\u8a66\u8f14\u52a9\u51fd\u6578', '\u53ef\u6e2c\u8a66 vs Win32 \u8026\u5408'],
+  ps: [],
+}));
+
+// Chapter 14 — Design Patterns
+Object.assign(zhTW, buildChapterZh(14, {
+  title: '\u8a2d\u8a08\u6a21\u5f0f',
+  h3s: [],
+  ps: [],
+  summaries: [
+    '\u6a21\u5f0f 1\uff1a\u72c0\u614b\u6a5f',
+    '\u6a21\u5f0f 2\uff1aRAII\uff08\u8cc7\u6e90\u7372\u53d6\u5373\u521d\u59cb\u5316\uff09',
+    '\u6a21\u5f0f 3\uff1a\u901a\u904e\u539f\u59cb\u6307\u6a19\u50b3\u905e\u56de\u547c\u4e0a\u4e0b\u6587',
+    '\u6a21\u5f0f 4\uff1a\u901a\u904e Atomic \u7ba1\u7406\u5168\u57df\u72c0\u614b',
+    '\u6a21\u5f0f 5\uff1a\u547d\u4ee4\u6a21\u5f0f',
+    '\u6a21\u5f0f 6\uff1a\u5feb\u7167\u6a21\u5f0f',
+    '\u6a21\u5f0f 7\uff1a\u5206\u5c64\u8996\u7a97\uff08\u96d9 HWND \u6e32\u67d3\uff09',
+  ],
+  detailPs: [
+    '<code>state.rs</code> \u5b9a\u7fa9\u5217\u8209\u3002<code>main.rs</code> \u5728\u6bcf\u500b\u52d5\u4f5c\u4e4b\u524d\u6aa2\u67e5\u5b83\u3002',
+    '\u8cc7\u6e90\u8207\u7269\u4ef6\u751f\u547d\u9031\u671f\u7d81\u5b9a\u3002\u7576\u7269\u4ef6\u88ab\u91cb\u653e\u6642\uff0c\u8cc7\u6e90\u4e5f\u88ab\u91cb\u653e\u3002',
+    'Win32 \u56de\u547c\u4e0d\u652f\u63f4\u9589\u5305\u3002\u6a21\u5f0f\u662f\uff1a',
+    '\u4e0d\u4f7f\u7528 <code>static mut</code>\uff08\u4e0d\u5b89\u5168\uff09\uff0c\u7a0b\u5f0f\u78bc\u4f7f\u7528 atomic\u3002\u5b89\u5168\u4e0d\u8b8a\u91cf\uff1a<strong>\u53ea\u6709\u8a0a\u606f\u6cf5\u57f7\u884c\u7dd2\u5b58\u53d6\u9019\u4e9b\u3002</strong>',
+    '<code>handle_key_down()</code> \u8fd4\u56de\u4e00\u500b <code>KeyAction</code> \u5217\u8209\uff0c\u800c\u4e0d\u662f\u76f4\u63a5\u57f7\u884c\u52d5\u4f5c\u3002\u9019\u5c07<strong>\u6c7a\u7b56</strong>\u8207<strong>\u57f7\u884c</strong>\u5206\u96e2\uff1a',
+    '\u597d\u8655\uff1a<code>handle_key_down()</code> \u53ef\u6e2c\u8a66\uff08\u8fd4\u56de\u503c\uff0c\u4e0d\u4fee\u6539\u5168\u57df\u72c0\u614b\uff09\u3002\u547c\u53eb\u8005\u6c7a\u5b9a\u5982\u4f55\u57f7\u884c\u3002',
+    '\u5728 overlay \u555f\u52d5\u6642\uff0c\u6574\u500b\u8996\u7a97\u6e05\u55ae\u88ab<strong>\u5feb\u7167</strong>\u5230 <code>Vec&lt;WindowInfo&gt;</code>\u3002\u6240\u6709\u5f8c\u7e8c\u64cd\u4f5c\u90fd\u5728\u9019\u500b\u5feb\u7167\u4e0a\u5de5\u4f5c &mdash; \u4e0d\u662f\u5373\u6642\u7684 Win32 \u72c0\u614b\u3002\u9019\u9632\u6b62\u8996\u7a97\u5728\u4e92\u52d5\u904e\u7a0b\u4e2d\u51fa\u73fe/\u6d88\u5931\u3002',
+  ],
+}));
+
+// Chapter 15 — Cargo
+Object.assign(zhTW, buildChapterZh(15, {
+  title: 'Cargo \u8207\u4f9d\u8cf4',
+  h3s: [],
+  ps: [],
+}));
+
+// Chapter 16 — Reading Order
+Object.assign(zhTW, buildChapterZh(16, {
+  title: '\u95b1\u8b80\u9806\u5e8f\uff1a\u5f9e\u54ea\u88e1\u958b\u59cb',
+  h3s: ['Tier 1\uff1a\u7d14 Rust\uff0c\u7121 Win32 <em>\uff08\u5f9e\u9019\u88e1\u958b\u59cb\uff09</em>', 'Tier 2\uff1a\u5e36\u6709\u8f15\u91cf Win32 \u4f9d\u8cf4\u7684\u908f\u8f2f', 'Tier 3\uff1aWin32 \u6574\u5408', 'Tier 4\uff1a\u6e32\u67d3\u8207\u7de8\u6392'],
+  ps: ['\u6309\u6b64\u9806\u5e8f\u95b1\u8b80\u7a0b\u5f0f\u78bc\uff0c\u5f9e\u6700\u7c21\u55ae\u5230\u6700\u8907\u96dc\uff1a'],
+}));
+
+// Cheatsheet + Exercises
+Object.assign(zhTW, (() => {
+  const m = {};
+  // Find cheatsheet title + exercises
+  const csEl = document.querySelector('#ch-cheatsheet h2');
+  if(csEl && csEl.dataset.i18n) m[csEl.dataset.i18n] = '<span class="ch-badge" style="background:var(--amber);color:#000">REF</span> Rust \u8a9e\u6cd5\u901f\u67e5\u8868';
+  const exEl = document.querySelector('#ch-exercises h2');
+  if(exEl && exEl.dataset.i18n) m[exEl.dataset.i18n] = '<span class="ch-badge" style="background:var(--green);color:#000">LAB</span> \u7df4\u7fd2';
+  const exP = document.querySelector('#ch-exercises > p');
+  if(exP && exP.dataset.i18n) m[exP.dataset.i18n] = '\u95b1\u8b80\u7a0b\u5f0f\u78bc\u5f8c\u5617\u8a66\u9019\u4e9b\u7df4\u7fd2\uff1a';
+  // Exercise titles and descriptions
+  const exTitles = ['\u65b0\u589e\u4e00\u500b\u5b57\u6bcd\u5e8f\u5217','\u65b0\u589e\u300c\u8996\u7a97\u6578\u91cf\u300d\u986f\u793a','\u8b93\u6de1\u5165\u6de1\u51fa\u6642\u9593\u53ef\u8a2d\u5b9a','\u65b0\u589e\u4e00\u500b\u6e2c\u8a66','\u5be6\u4f5c\u300c\u95dc\u9589\u8996\u7a97\u300d\u52d5\u4f5c'];
+  const exDescs = [
+    '\u7de8\u8f2f <code>letter_assignment.rs</code> \u4f7f\u7528\u4e0d\u540c\u7684\u9375\u76e4\u4f48\u5c40\uff08\u4f8b\u5982 Dvorak \u4e3b\u884c\uff09\u3002\u57f7\u884c <code>cargo test letter_assignment</code> \u9a57\u8b49\u3002',
+    '\u5728 <code>overlay_renderer.rs</code> \u4e2d\u65b0\u589e\u6587\u5b57\u5728\u53f3\u4e0a\u89d2\u986f\u793a\u300c5 \u500b\u8996\u7a97\u300d\u3002\u4f7f\u7528\u73fe\u6709\u7684 <code>text_brush</code> \u548c <code>title_format</code>\u3002',
+    '\u5728 <code>AppConfig</code> \u4e2d\u65b0\u589e <code>fade_duration_ms: u32</code> \u6b04\u4f4d\uff0c\u7136\u5f8c\u5728 <code>animation.rs</code> \u4e2d\u7528\u5b83\u4f86\u52d5\u614b\u8a08\u7b97 <code>ALPHA_DELTA</code>\u3002',
+    '\u5728 <code>grid_layout.rs</code> \u4e2d\u5beb\u4e00\u500b\u6e2c\u8a66\uff0c\u9a57\u8b49 3 \u500b\u8996\u7a97\u7522\u751f 2x2 \u7db2\u683c\uff082 \u6b04\u30012 \u884c\uff09\u3002\u904f\u5faa\u73fe\u6709\u7684\u6e2c\u8a66\u98a8\u683c\u3002',
+    '\u65b0\u589e <code>KeyAction::Close(HWND)</code> \u8b8a\u9ad4\uff0c\u7576\u9078\u64c7\u8996\u7a97\u6642\u6309 Delete \u89f8\u767c\u3002\u4f60\u9700\u8981\u4fee\u6539 <code>interaction.rs</code> \u548c <code>main.rs</code>\u3002',
+  ];
+  document.querySelectorAll('.exercise h4').forEach((el,i)=>{
+    if(el.dataset.i18n && exTitles[i]) m[el.dataset.i18n] = exTitles[i];
+  });
+  document.querySelectorAll('.exercise > p').forEach((el,i)=>{
+    if(el.dataset.i18n && exDescs[i]) m[el.dataset.i18n] = exDescs[i];
+  });
+  return m;
+})());
+
+// Helper: build chapter translations by finding elements in DOM order
+function buildChapterZh(chNum, opts){
+  const m = {};
+  const sec = document.getElementById('ch-'+chNum);
+  if(!sec) return m;
+
+  // h2 title
+  const h2 = sec.querySelector('h2');
+  if(h2 && h2.dataset.i18n && opts.title){
+    const badge = h2.querySelector('.ch-badge');
+    const badgeHtml = badge ? badge.outerHTML : '';
+    m[h2.dataset.i18n] = badgeHtml + ' ' + opts.title;
+  }
+
+  // h3s
+  if(opts.h3s && opts.h3s.length){
+    const h3els = sec.querySelectorAll('h3');
+    h3els.forEach((el,i) => {
+      if(el.dataset.i18n && opts.h3s[i]) m[el.dataset.i18n] = opts.h3s[i];
+    });
+  }
+
+  // Direct paragraphs
+  if(opts.ps && opts.ps.length){
+    const pels = sec.querySelectorAll(':scope > p');
+    pels.forEach((el,i) => {
+      if(el.dataset.i18n && opts.ps[i]) m[el.dataset.i18n] = opts.ps[i];
+    });
+  }
+
+  // Callout items
+  if(opts.callouts){
+    opts.callouts.forEach(co => {
+      const callout = sec.querySelector('.callout');
+      if(!callout) return;
+      const ct = callout.querySelector('.callout-title');
+      if(ct && ct.dataset.i18n && co.title) m[ct.dataset.i18n] = co.title;
+      const lis = callout.querySelectorAll('li');
+      lis.forEach((li,i)=>{
+        if(li.dataset.i18n && co.items[i]) m[li.dataset.i18n] = co.items[i];
+      });
+    });
+  }
+
+  // Summaries (for ch-14 details)
+  if(opts.summaries){
+    const sums = sec.querySelectorAll('details > summary');
+    sums.forEach((el,i)=>{
+      if(el.dataset.i18n && opts.summaries[i]) m[el.dataset.i18n] = opts.summaries[i];
+    });
+  }
+
+  // Detail body paragraphs
+  if(opts.detailPs){
+    const dps = sec.querySelectorAll('.detail-body > p');
+    dps.forEach((el,i)=>{
+      if(el.dataset.i18n && opts.detailPs[i]) m[el.dataset.i18n] = opts.detailPs[i];
+    });
+  }
+
+  return m;
+}
+
+// Also translate TOC sidebar entries
+const tocZhTW = {
+  0:'\u5c08\u6848\u7d50\u69cb\u8207\u6a21\u7d44\u7cfb\u7d71',
+  1:'\u6240\u6709\u6b0a\u3001\u501f\u7528\u8207\u751f\u547d\u9031\u671f',
+  2:'\u7d50\u69cb\u9ad4\u8207\u65b9\u6cd5',
+  3:'\u5217\u8209\u8207\u6a21\u5f0f\u6bd4\u5c0d',
+  4:'\u7279\u5fb5\u8207\u591a\u578b',
+  5:'\u932f\u8aa4\u8655\u7406',
+  6:'\u96c6\u5408\u8207\u8fed\u4ee3\u5668',
+  7:'\u9589\u5305',
+  8:'\u6cdb\u578b\u8207\u578b\u5225\u53c3\u6578',
+  9:'unsafe Rust \u8207 FFI',
+  10:'\u667a\u6167\u6307\u6a19\u8207\u8a18\u61b6\u9ad4',
+  11:'\u4e26\u884c\u57fa\u5143',
+  12:'\u6e2c\u8a66',
+  13:'\u8a2d\u8a08\u6a21\u5f0f',
+  14:'Cargo \u8207\u4f9d\u8cf4',
+  15:'\u95b1\u8b80\u9806\u5e8f',
+  16:'\u8a9e\u6cd5\u901f\u67e5\u8868',
+  17:'\u7df4\u7fd2',
+};
+const tocEnStore = {};
+document.querySelectorAll('#toc a').forEach((a,i)=>{
+  // Store text after the ch-num span
+  const spans = a.querySelectorAll('span');
+  const textNode = a.childNodes[a.childNodes.length-1];
+  tocEnStore[i] = textNode.textContent;
+});
+
+// ─── Main toggle function ───
+let currentLang = localStorage.getItem('rustforge-lang') || 'en';
+
+function setLang(lang){
+  currentLang = lang;
+  localStorage.setItem('rustforge-lang', lang);
+  document.documentElement.lang = lang === 'zh' ? 'zh-TW' : 'en';
+
+  // Toggle button active states
+  document.querySelectorAll('#lang-toggle .lang-btn').forEach(b=>{
+    b.classList.toggle('active', b.dataset.lang === lang);
+  });
+
+  // Swap all data-i18n elements
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
+    const key = el.dataset.i18n;
+    if(lang === 'zh' && zhTW[key]){
+      el.innerHTML = zhTW[key];
+    } else if(lang === 'en' && enStore[key]){
+      el.innerHTML = enStore[key];
+    }
+  });
+
+  // Swap TOC entries
+  document.querySelectorAll('#toc a').forEach((a,i)=>{
+    const textNode = a.childNodes[a.childNodes.length-1];
+    if(lang === 'zh' && tocZhTW[i] !== undefined){
+      textNode.textContent = tocZhTW[i];
+    } else if(lang === 'en' && tocEnStore[i]){
+      textNode.textContent = tocEnStore[i];
+    }
+  });
+
+  // Sidebar footer
+  const footer = document.querySelector('#sidebar-footer .progress-text');
+  if(footer){
+    const count = document.getElementById('done-count').textContent;
+    if(lang === 'zh'){
+      footer.innerHTML = '<span id="done-count">'+count+'</span> / 16 \u7ae0\u5df2\u95b1\u8b80';
+    } else {
+      footer.innerHTML = '<span id="done-count">'+count+'</span> / 16 chapters read';
+    }
+  }
+
+  // Re-apply syntax highlighting (innerHTML swap destroys it)
+  document.querySelectorAll('pre code').forEach(block => {
+    const langEl = block.closest('pre').querySelector('.lang');
+    if(langEl && (langEl.textContent === 'rust' || langEl.textContent === 'RUST')){
+      // Only re-highlight if not already highlighted
+      if(!block.querySelector('.hl-kw')){
+        block.innerHTML = highlightRust(block.innerHTML);
+      }
+    }
+  });
+}
+
+// Apply saved language on load
+if(currentLang === 'zh'){
+  setLang('zh');
+}
+</script>
+</body>
+</html>
