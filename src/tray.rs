@@ -5,9 +5,9 @@ use windows::Win32::UI::Shell::{
     NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, LoadIconW, SetForegroundWindow,
-    TrackPopupMenu, IDI_APPLICATION, MF_SEPARATOR, MF_STRING,
-    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, SetForegroundWindow,
+    TrackPopupMenu, MF_CHECKED, MF_SEPARATOR,
+    MF_STRING, MF_UNCHECKED, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
 };
 
 /// Custom Windows message used for tray icon callbacks.
@@ -17,6 +17,7 @@ pub const WM_TRAY_CALLBACK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_US
 pub const MENU_SETTINGS: u32 = 2001;
 pub const MENU_ABOUT: u32 = 2002;
 pub const MENU_EXIT: u32 = 2003;
+pub const MENU_DIRECT_SWITCH: u32 = 2004;
 
 /// Tray icon ID.
 const TRAY_ICON_ID: u32 = 1;
@@ -24,7 +25,7 @@ const TRAY_ICON_ID: u32 = 1;
 /// Register the system tray icon.
 pub fn add_tray_icon(hwnd: HWND) -> windows::core::Result<()> {
     unsafe {
-        let icon = LoadIconW(None, IDI_APPLICATION)?;
+        let icon = crate::icon::load_app_icon()?;
 
         let mut tooltip = [0u16; 128];
         let tip_str = "Window Selector";
@@ -101,7 +102,7 @@ pub fn show_balloon(hwnd: HWND, title: &str, text: &str) {
 
 /// Show the right-click context menu at the cursor position.
 /// Returns the selected command ID, or 0 if none.
-pub fn show_context_menu(hwnd: HWND) -> u32 {
+pub fn show_context_menu(hwnd: HWND, direct_switch: bool) -> u32 {
     unsafe {
         let menu = match CreatePopupMenu() {
             Ok(m) => m,
@@ -110,6 +111,11 @@ pub fn show_context_menu(hwnd: HWND) -> u32 {
                 return 0;
             }
         };
+
+        let direct_switch_w: Vec<u16> = "Switch on key press\0".encode_utf16().collect();
+        let check_flag = if direct_switch { MF_CHECKED } else { MF_UNCHECKED };
+        let _ = AppendMenuW(menu, MF_STRING | check_flag, MENU_DIRECT_SWITCH as usize, PCWSTR(direct_switch_w.as_ptr()));
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
         let settings_w: Vec<u16> = "Settings...\0".encode_utf16().collect();
         let about_w: Vec<u16> = "About\0".encode_utf16().collect();

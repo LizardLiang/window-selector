@@ -10,6 +10,10 @@ pub struct AppConfig {
     pub hotkey_modifiers: u32,
     /// Activation hotkey virtual key code (e.g., VK_SPACE = 0x20)
     pub hotkey_vk: u32,
+    /// When true, pressing a letter key immediately switches to that window.
+    /// When false (default), letter selects and Enter/Space confirms.
+    #[serde(default)]
+    pub direct_switch: bool,
 }
 
 impl Default for AppConfig {
@@ -19,6 +23,7 @@ impl Default for AppConfig {
             hotkey_modifiers: 0x0002 | 0x0001 | 0x4000,
             // VK_SPACE = 0x20
             hotkey_vk: 0x20,
+            direct_switch: false,
         }
     }
 }
@@ -112,11 +117,13 @@ mod tests {
         let original = AppConfig {
             hotkey_modifiers: 0x0004, // MOD_SHIFT
             hotkey_vk: 0x70,          // VK_F1
+            direct_switch: true,
         };
         AppConfig::save(&dir, &original).expect("save should succeed");
         let loaded = AppConfig::load(&dir).expect("load should succeed");
         assert_eq!(loaded.hotkey_modifiers, original.hotkey_modifiers);
         assert_eq!(loaded.hotkey_vk, original.hotkey_vk);
+        assert_eq!(loaded.direct_switch, original.direct_switch);
         // Cleanup
         let _ = fs::remove_dir_all(&dir);
     }

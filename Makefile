@@ -25,7 +25,7 @@ build:
 
 installer: build
 	$(NSIS) /DVERSION=$(VERSION) installer/installer.nsi
-	@echo "Installer created: target/release/WindowSelector-$(VERSION)-setup.exe"
+	@echo "Installer created: target/x86_64-pc-windows-msvc/release/WindowSelector-$(VERSION)-setup.exe"
 
 clean:
 	$(CARGO) clean

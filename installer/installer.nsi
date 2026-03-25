@@ -37,6 +37,9 @@
   !define VERSION "0.0.0"
 !endif
 
+; Registry path for Add/Remove Programs entry (used in Install and Uninstall sections)
+!define UNINST_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector"
+
 ; Installer / uninstaller icon
 !define MUI_ICON "..\resources\app.ico"
 !define MUI_UNICON "..\resources\app.ico"
@@ -45,9 +48,9 @@
 ; 3. Global attributes
 ; ---------------------------------------------------------------------------
 Name "Window Selector"
-OutFile "..\target\release\WindowSelector-${VERSION}-setup.exe"
+OutFile "..\target\x86_64-pc-windows-msvc\release\WindowSelector-${VERSION}-setup.exe"
 InstallDir "$LOCALAPPDATA\window-selector"
-InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector" "InstallLocation"
+InstallDirRegKey HKCU "${UNINST_REG_KEY}" "InstallLocation"
 RequestExecutionLevel user
 
 ; ---------------------------------------------------------------------------
@@ -55,7 +58,6 @@ RequestExecutionLevel user
 ; ---------------------------------------------------------------------------
 Var StartupCheckbox   ; State of "Start with Windows" checkbox
 Var WasRunning        ; "1" if installer closed a running instance, "0" otherwise
-Var LaunchCheckbox    ; State of "Launch after install" checkbox (unused directly; MUI handles it)
 Var CleanupCheckbox   ; State of "Remove config and logs?" checkbox in uninstaller
 
 ; ---------------------------------------------------------------------------
@@ -104,7 +106,7 @@ Function CloseRunningInstance
   ${If} $0 P<> 0
     StrCpy $WasRunning "1"
 
-    ; Send WM_CLOSE (0x0010) — fire-and-forget so installer stays responsive.
+    ; Send WM_CLOSE (0x0010) -- fire-and-forget so installer stays responsive.
     System::Call 'user32::PostMessageW(p r0, i 0x0010, p 0, p 0)'
 
     ; Poll up to 10 x 500ms = 5 seconds for process exit.
@@ -113,13 +115,13 @@ Function CloseRunningInstance
       Sleep 500
       System::Call 'user32::FindWindowExW(p -3, p 0, w "WindowSelectorMsgWnd", p 0) p .r0'
       ${If} $0 == 0
-        ; Window is gone — process has exited cleanly.
+        ; Window is gone -- process has exited cleanly.
         Goto done_installer
       ${EndIf}
       IntOp $1 $1 + 1
     ${Loop}
 
-    ; Timeout — force kill as safety net (AC-3.4).
+    ; Timeout -- force kill as safety net (AC-3.4).
     nsExec::ExecToLog 'taskkill /f /im window-selector.exe'
 
     ; Brief pause after force kill to allow OS to release file handles.
@@ -134,7 +136,7 @@ FunctionEnd
 ;
 ; Identical logic to CloseRunningInstance. NSIS requires separate un. prefixed
 ; function definitions for code called from the Uninstall section.
-; WasRunning is NOT set here — restart logic is installer-only.
+; WasRunning is NOT set here -- restart logic is installer-only.
 ; ---------------------------------------------------------------------------
 Function un.CloseRunningInstance
   ; Find the message-only window.
@@ -154,7 +156,7 @@ Function un.CloseRunningInstance
       IntOp $1 $1 + 1
     ${Loop}
 
-    ; Timeout — force kill.
+    ; Timeout -- force kill.
     nsExec::ExecToLog 'taskkill /f /im window-selector.exe'
     Sleep 500
 
@@ -198,7 +200,7 @@ Function un.CleanupPageCreate
   ${NSD_CreateCheckbox} 10u 30u 100% 12u \
     "Also remove configuration and log files ($APPDATA\window-selector)"
   Pop $CleanupCheckbox
-  ; Default: unchecked — preserve user data by default.
+  ; Default: unchecked -- preserve user data by default.
   nsDialogs::Show
 FunctionEnd
 
@@ -219,10 +221,10 @@ FunctionEnd
 ; before launching to avoid running two instances.
 ; ---------------------------------------------------------------------------
 Function LaunchApp
-  ; Check if already running — .onInstSuccess may have restarted it for an upgrade.
+  ; Check if already running -- .onInstSuccess may have restarted it for an upgrade.
   System::Call 'user32::FindWindowExW(p -3, p 0, w "WindowSelectorMsgWnd", p 0) p .r0'
   ${If} $0 == 0
-    ; Not running — launch it now.
+    ; Not running -- launch it now.
     Exec '"$INSTDIR\window-selector.exe"'
   ${EndIf}
 FunctionEnd
@@ -258,7 +260,7 @@ Section "Install"
   SetOutPath "$INSTDIR"
 
   ; Install application binary and icon.
-  File "..\target\release\window-selector.exe"
+  File "..\target\x86_64-pc-windows-msvc\release\window-selector.exe"
   File "..\resources\app.ico"
 
   ; Create uninstaller stub in the install directory.
@@ -273,38 +275,38 @@ Section "Install"
 
   ; Add/Remove Programs (Programs and Features) registry keys.
   WriteRegStr HKCU \
-    "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector" \
+    "${UNINST_REG_KEY}" \
     "DisplayName" "Window Selector"
   WriteRegStr HKCU \
-    "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector" \
+    "${UNINST_REG_KEY}" \
     "DisplayIcon" "$INSTDIR\app.ico"
   WriteRegStr HKCU \
-    "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector" \
+    "${UNINST_REG_KEY}" \
     "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegStr HKCU \
-    "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector" \
+    "${UNINST_REG_KEY}" \
     "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU \
-    "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector" \
+    "${UNINST_REG_KEY}" \
     "DisplayVersion" "${VERSION}"
   WriteRegDWORD HKCU \
-    "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector" \
+    "${UNINST_REG_KEY}" \
     "NoModify" 1
   WriteRegDWORD HKCU \
-    "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector" \
+    "${UNINST_REG_KEY}" \
     "NoRepair" 1
   WriteRegStr HKCU \
-    "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector" \
+    "${UNINST_REG_KEY}" \
     "Publisher" "window-selector"
 
   ; Compute and write estimated install size (in KB) for Programs and Features.
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU \
-    "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector" \
+    "${UNINST_REG_KEY}" \
     "EstimatedSize" $0
 
-  ; Startup Run registry key — conditional on Options page checkbox.
+  ; Startup Run registry key -- conditional on Options page checkbox.
   ; Written on every install for idempotency: either add or remove the key.
   ${If} $StartupCheckbox == ${BST_CHECKED}
     WriteRegStr HKCU \
@@ -346,14 +348,14 @@ Section "Uninstall"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "WindowSelector"
 
   ; Remove Add/Remove Programs entry.
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector"
+  DeleteRegKey HKCU "${UNINST_REG_KEY}"
 
   ; Conditionally remove user config and log data.
   ${If} $CleanupCheckbox == ${BST_CHECKED}
     RMDir /r "$APPDATA\window-selector"
   ${EndIf}
 
-  ; Remove install directory — plain RMDir (no /r) so it only removes if empty.
+  ; Remove install directory -- plain RMDir (no /r) so it only removes if empty.
   ; This prevents accidental deletion of user-placed files.
   RMDir "$INSTDIR"
 SectionEnd

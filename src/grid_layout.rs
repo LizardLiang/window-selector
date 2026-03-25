@@ -15,6 +15,7 @@ pub struct CellRect {
 impl CellRect {
     /// Returns a scaled version of this cell centered on the same point.
     /// Used for the 1.05x selection scale-up.
+    #[allow(dead_code)]
     pub fn scaled(&self, factor: f32) -> CellRect {
         let new_w = self.width * factor;
         let new_h = self.height * factor;

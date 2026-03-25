@@ -7,6 +7,7 @@ mod config;
 mod dwm_thumbnails;
 mod grid_layout;
 mod hotkey;
+mod icon;
 mod interaction;
 mod keyboard_hook;
 mod letter_assignment;
@@ -29,8 +30,8 @@ use mru_tracker::MruTracker;
 use overlay::OverlayManager;
 use state::{OverlayState, SessionTags};
 use tray::{
-    add_tray_icon, remove_tray_icon, show_balloon, MENU_ABOUT, MENU_EXIT, MENU_SETTINGS,
-    WM_TRAY_CALLBACK,
+    add_tray_icon, remove_tray_icon, show_balloon, MENU_ABOUT, MENU_DIRECT_SWITCH, MENU_EXIT,
+    MENU_SETTINGS, WM_TRAY_CALLBACK,
 };
 use window_enumerator::{register_overlay_hwnds, snapshot_windows};
 use window_switcher::{restore_focus, switch_to_window};
@@ -47,9 +48,10 @@ use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
-    GetMessageW, PostQuitMessage, RegisterClassExW, SetWindowLongPtrW, TranslateMessage,
-    GWLP_USERDATA, HMENU, MSG, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_TIMER, WM_ACTIVATE, WM_PAINT,
+    GetMessageW, PostQuitMessage, RegisterClassExW, SetWindowLongPtrW,
+    TranslateMessage, GWLP_USERDATA, HMENU,
+    MSG, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_TIMER, WM_ACTIVATE, WM_PAINT,
     WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, CS_HREDRAW, CS_VREDRAW, WA_INACTIVE,
     HWND_MESSAGE,
 };
@@ -156,6 +158,9 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
     let class_name: Vec<u16> = MSG_WINDOW_CLASS.encode_utf16().collect();
     let wnd_name: Vec<u16> = MSG_WINDOW_NAME.encode_utf16().collect();
 
+    // Load application icon from embedded resource.
+    let app_icon = icon::load_app_icon().unwrap_or_default();
+
     // Register message-only window class.
     let wc = WNDCLASSEXW {
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -164,12 +169,12 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: instance.into(),
-        hIcon: windows::Win32::UI::WindowsAndMessaging::HICON::default(),
+        hIcon: app_icon,
         hCursor: windows::Win32::UI::WindowsAndMessaging::HCURSOR::default(),
         hbrBackground: windows::Win32::Graphics::Gdi::HBRUSH::default(),
         lpszMenuName: PCWSTR::null(),
         lpszClassName: PCWSTR(class_name.as_ptr()),
-        hIconSm: windows::Win32::UI::WindowsAndMessaging::HICON::default(),
+        hIconSm: app_icon,
     };
 
     if RegisterClassExW(&wc) == 0 {
@@ -608,13 +613,20 @@ unsafe fn handle_tray_event(app: &mut AppState, hwnd: HWND, lparam: LPARAM) {
     let event = (lparam.0 & 0xFFFF) as u32;
     // WM_RBUTTONUP
     if event == 0x0205 {
-        let cmd = tray::show_context_menu(hwnd);
+        let cmd = tray::show_context_menu(hwnd, app.config.direct_switch);
         handle_menu_command(app, hwnd, cmd);
     }
 }
 
 unsafe fn handle_menu_command(app: &mut AppState, hwnd: HWND, cmd: u32) {
     match cmd {
+        MENU_DIRECT_SWITCH => {
+            app.config.direct_switch = !app.config.direct_switch;
+            tracing::info!("Direct switch toggled to {}", app.config.direct_switch);
+            if let Err(e) = AppConfig::save(&app.config_dir, &app.config) {
+                tracing::error!("Failed to save config: {}", e);
+            }
+        }
         MENU_SETTINGS => {
             settings_dialog::SettingsDialog::show(hwnd, &app.config);
         }
@@ -658,6 +670,7 @@ unsafe fn handle_overlay_key(vk_code: u32) {
         &app.overlay_state,
         &app.window_snapshot,
         &mut app.session_tags,
+        app.config.direct_switch,
     );
 
     match action {

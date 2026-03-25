@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # Strip leading 'v' to get bare version (e.g. v1.2.3 -> 1.2.3)
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Verify binary exists
+        shell: bash
+        run: |
+          ls -lh target/x86_64-pc-windows-msvc/release/window-selector.exe
+
+      - name: Install NSIS
+        id: nsis
+        shell: pwsh
+        run: |
+          # Attempt to install NSIS via winget; mark as available if it succeeds.
+          try {
+            winget install NSIS.NSIS --silent --accept-package-agreements --accept-source-agreements
+            # Refresh PATH so makensis is visible to subsequent steps.
+            $nsisDir = "C:\Program Files (x86)\NSIS"
+            echo "$nsisDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            echo "available=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            Write-Host "NSIS installed successfully."
+          } catch {
+            Write-Host "NSIS installation failed or winget unavailable: $_"
+            echo "available=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+
+      - name: Build NSIS installer
+        id: installer
+        if: steps.nsis.outputs.available == 'true'
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $installerPath = "target\x86_64-pc-windows-msvc\release\WindowSelector-${env:VERSION}-setup.exe"
+          & makensis /DVERSION=$env:VERSION installer\installer.nsi
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "makensis failed with exit code $LASTEXITCODE"
+            echo "built=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            exit 1
+          }
+          echo "path=${installerPath}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          echo "built=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Installer built: $installerPath"
+
+      - name: Stage release artifacts
+        id: artifacts
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          INSTALLER_BUILT: ${{ steps.installer.outputs.built }}
+          INSTALLER_PATH: ${{ steps.installer.outputs.path }}
+        run: |
+          mkdir -p release-artifacts
+
+          # Always include the raw binary.
+          cp target/x86_64-pc-windows-msvc/release/window-selector.exe \
+             release-artifacts/window-selector-${VERSION}-x86_64.exe
+
+          # Include installer when it was built successfully.
+          if [[ "${INSTALLER_BUILT}" == "true" && -f "${INSTALLER_PATH}" ]]; then
+            cp "${INSTALLER_PATH}" \
+               "release-artifacts/WindowSelector-${VERSION}-setup.exe"
+            echo "has_installer=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_installer=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          ls -lh release-artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "Window Selector ${{ steps.version.outputs.tag }}"
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
+          generate_release_notes: true
+          files: |
+            release-artifacts/*
+          body: |
+            ## Installation
+
+            **With installer (recommended):**
+            Download `WindowSelector-${{ steps.version.outputs.version }}-setup.exe` and run it.
+
+            **Portable binary:**
+            Download `window-selector-${{ steps.version.outputs.version }}-x86_64.exe` and place it anywhere you like.
+
+            > **Note:** The installer may not be present for all releases if NSIS is unavailable in CI.
+            > In that case, use the portable binary.
+
+            ## System Requirements
+            - Windows 10 or 11 (64-bit)
+            - No additional runtime required

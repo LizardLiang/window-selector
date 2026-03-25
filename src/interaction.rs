@@ -57,11 +57,14 @@ pub enum KeyAction {
 
 /// Handle a WM_KEYDOWN event while the overlay is active.
 /// Returns the action to take.
+/// When `direct_switch` is true, pressing a letter key immediately switches
+/// to the window instead of selecting it first.
 pub fn handle_key_down(
     vk_code: u32,
     state: &OverlayState,
     windows: &[WindowInfo],
     tags: &mut SessionTags,
+    direct_switch: bool,
 ) -> KeyAction {
     match state {
         OverlayState::FadingOut { .. } => {
@@ -104,9 +107,16 @@ pub fn handle_key_down(
         return KeyAction::None;
     }
 
-    // Letter keys (a-z) — select a window
+    // Letter keys (a-z) — select or switch to a window
+    // When Ctrl is held, always select (never direct-switch) so the user
+    // can Ctrl+Letter to select, then Ctrl+Number to assign a quick-list tag.
     if let Some(letter) = vk_to_letter(vk_code) {
         if let Some(idx) = crate::letter_assignment::find_by_letter(windows, letter) {
+            if direct_switch && !ctrl_held {
+                if let Some(window) = windows.get(idx) {
+                    return KeyAction::SwitchTo(window.hwnd);
+                }
+            }
             return KeyAction::Select(idx);
         }
         // Unassigned letter: no-op
@@ -188,7 +198,7 @@ mod tests {
         let state = active_state(None);
 
         // Press 'A' (VK_A = 0x41)
-        let action = handle_key_down(VK_A.0 as u32, &state, &windows, &mut tags);
+        let action = handle_key_down(VK_A.0 as u32, &state, &windows, &mut tags, false);
         assert!(matches!(action, KeyAction::Select(0)));
     }
 
@@ -197,7 +207,7 @@ mod tests {
         let windows: Vec<WindowInfo> = vec![];
         let mut tags = SessionTags::new();
         let state = active_state(None);
-        let action = handle_key_down(VK_ESCAPE.0 as u32, &state, &windows, &mut tags);
+        let action = handle_key_down(VK_ESCAPE.0 as u32, &state, &windows, &mut tags, false);
         assert!(matches!(action, KeyAction::Dismiss));
     }
 
@@ -206,7 +216,7 @@ mod tests {
         let windows = vec![make_window_info(1, 'a')];
         let mut tags = SessionTags::new();
         let state = active_state(None);
-        let action = handle_key_down(VK_RETURN.0 as u32, &state, &windows, &mut tags);
+        let action = handle_key_down(VK_RETURN.0 as u32, &state, &windows, &mut tags, false);
         assert!(matches!(action, KeyAction::None));
     }
 
@@ -218,7 +228,7 @@ mod tests {
         let windows = vec![w];
         let mut tags = SessionTags::new();
         let state = active_state(Some(0));
-        let action = handle_key_down(VK_RETURN.0 as u32, &state, &windows, &mut tags);
+        let action = handle_key_down(VK_RETURN.0 as u32, &state, &windows, &mut tags, false);
         assert!(matches!(action, KeyAction::SwitchTo(_)));
     }
 
@@ -227,7 +237,7 @@ mod tests {
         let windows: Vec<WindowInfo> = vec![];
         let mut tags = SessionTags::new();
         let state = OverlayState::FadingOut { switch_target: None };
-        let action = handle_key_down(VK_ESCAPE.0 as u32, &state, &windows, &mut tags);
+        let action = handle_key_down(VK_ESCAPE.0 as u32, &state, &windows, &mut tags, false);
         assert!(matches!(action, KeyAction::None));
     }
 
@@ -256,7 +266,7 @@ mod tests {
         let windows = vec![w];
         let mut tags = SessionTags::new();
         let state = active_state(Some(0));
-        let action = handle_key_down(VK_SPACE.0 as u32, &state, &windows, &mut tags);
+        let action = handle_key_down(VK_SPACE.0 as u32, &state, &windows, &mut tags, false);
         assert!(
             matches!(action, KeyAction::SwitchTo(_)),
             "Space key with selection should trigger SwitchTo, got {:?}",
@@ -271,7 +281,7 @@ mod tests {
         let windows = vec![make_window_info(1, 'a')];
         let mut tags = SessionTags::new();
         let state = active_state(None);
-        let action = handle_key_down(VK_Z.0 as u32, &state, &windows, &mut tags);
+        let action = handle_key_down(VK_Z.0 as u32, &state, &windows, &mut tags, false);
         assert!(
             matches!(action, KeyAction::None),
             "Unassigned letter should produce None, got {:?}",
@@ -367,7 +377,7 @@ mod tests {
         );
         // Also verify that without ctrl, a number key produces None or SwitchTo (not TagAssigned)
         // when no tag is set for that number.
-        let action_no_ctrl = handle_key_down(VK_1.0 as u32, &state, &windows, &mut SessionTags::new());
+        let action_no_ctrl = handle_key_down(VK_1.0 as u32, &state, &windows, &mut SessionTags::new(), false);
         // With an empty tags store and no Ctrl, pressing 1 should produce None (no tagged window).
         assert!(
             matches!(action_no_ctrl, KeyAction::None),
@@ -390,7 +400,7 @@ mod tests {
         // Even if GetKeyState returned ctrl-held (which it won't in test),
         // the guard `if let OverlayState::Active { selected: Some(idx) }` prevents assignment.
         // Simulate by calling handle_key_down and verifying tags remains empty.
-        let action = handle_key_down(VK_1.0 as u32, &state, &windows, &mut tags);
+        let action = handle_key_down(VK_1.0 as u32, &state, &windows, &mut tags, false);
         // Without ctrl (which GetKeyState returns as not-held in tests), this is a number
         // switch path; tags is empty so result is None.
         assert!(
@@ -412,7 +422,7 @@ mod tests {
         let windows: Vec<WindowInfo> = vec![];
         let state = active_state(None);
         // Press '1' without Ctrl — should switch to the tagged window.
-        let action = handle_key_down(VK_1.0 as u32, &state, &windows, &mut tags);
+        let action = handle_key_down(VK_1.0 as u32, &state, &windows, &mut tags, false);
         assert!(
             matches!(action, KeyAction::SwitchTo(_)),
             "Number key with valid tag should produce SwitchTo, got {:?}",
@@ -427,10 +437,40 @@ mod tests {
         // Tag 5 is not assigned
         let windows: Vec<WindowInfo> = vec![];
         let state = active_state(None);
-        let action = handle_key_down(VK_5.0 as u32, &state, &windows, &mut tags);
+        let action = handle_key_down(VK_5.0 as u32, &state, &windows, &mut tags, false);
         assert!(
             matches!(action, KeyAction::None),
             "Unassigned number key should produce None, got {:?}",
+            action
+        );
+    }
+
+    // --- Direct switch mode: letter key immediately switches ---
+    #[test]
+    fn test_direct_switch_letter_switches_immediately() {
+        let h = hwnd(42);
+        let mut w = WindowInfo::new(h, "Test".into(), false, 0);
+        w.letter = Some('a');
+        let windows = vec![w];
+        let mut tags = SessionTags::new();
+        let state = active_state(None);
+        let action = handle_key_down(VK_A.0 as u32, &state, &windows, &mut tags, true);
+        assert!(
+            matches!(action, KeyAction::SwitchTo(_)),
+            "Direct switch: letter key should produce SwitchTo, got {:?}",
+            action
+        );
+    }
+
+    #[test]
+    fn test_confirm_mode_letter_selects() {
+        let windows = vec![make_window_info(1, 'a')];
+        let mut tags = SessionTags::new();
+        let state = active_state(None);
+        let action = handle_key_down(VK_A.0 as u32, &state, &windows, &mut tags, false);
+        assert!(
+            matches!(action, KeyAction::Select(0)),
+            "Confirm mode: letter key should produce Select, got {:?}",
             action
         );
     }
