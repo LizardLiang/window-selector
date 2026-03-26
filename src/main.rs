@@ -41,10 +41,9 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, EndPaint, FillRect,
-    RoundRect, SelectObject, SetBkMode, SetTextColor,
-    PAINTSTRUCT, PS_NULL, TRANSPARENT,
-    DrawTextW, DT_CENTER, DT_SINGLELINE, DT_VCENTER,
+    BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, DrawTextW, EndPaint, FillRect, RoundRect,
+    SelectObject, SetBkMode, SetTextColor, DT_CENTER, DT_SINGLELINE, DT_VCENTER, PAINTSTRUCT,
+    PS_NULL, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::DrawIconEx;
 use windows::Win32::UI::WindowsAndMessaging::DI_NORMAL;
@@ -84,8 +83,7 @@ struct AppState {
 /// All Win32 callbacks (`WndProc`, WinEvent hooks) are dispatched on the thread that
 /// called `GetMessageW`, so there is never concurrent access. The atomic is used
 /// purely to avoid `static mut`, not for cross-thread synchronization.
-static APP_STATE_PTR: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+static APP_STATE_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Returns the current `AppState` pointer (may be null before init or after cleanup).
 #[inline]
@@ -155,13 +153,13 @@ fn main() {
     }
 
     // Determine config directory.
-    let config_dir = AppConfig::default_config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("./config"));
+    let config_dir =
+        AppConfig::default_config_dir().unwrap_or_else(|| std::path::PathBuf::from("./config"));
 
     // Initialize logging.
     let logs_dir = config_dir.join("logs");
     if let Err(e) = logging::init_logging(&logs_dir, debug_mode) {
-        eprintln!("Logging init failed: {}", e);
+        eprintln!("Logging init failed: {} - main.rs:162", e);
     }
 
     tracing::info!("Window Selector starting up (debug_mode={})", debug_mode);
@@ -223,7 +221,10 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
         PCWSTR(class_name.as_ptr()),
         PCWSTR(wnd_name.as_ptr()),
         WS_OVERLAPPEDWINDOW,
-        0, 0, 0, 0,
+        0,
+        0,
+        0,
+        0,
         HWND_MESSAGE,
         HMENU::default(),
         instance,
@@ -265,12 +266,17 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
     if monitors.is_empty() {
         tracing::warn!("No monitors detected");
     }
-    if let Err(e) = (*app_state_ptr).overlay_manager.create_windows(monitors, overlay_wndproc) {
+    if let Err(e) = (*app_state_ptr)
+        .overlay_manager
+        .create_windows(monitors, overlay_wndproc)
+    {
         tracing::error!("Overlay window creation failed: {:?}", e);
     }
 
     // Register overlay HWNDs (including label overlay) to be excluded from window enumeration.
-    let overlay_hwnds = (*app_state_ptr).overlay_manager.all_hwnds_including_labels();
+    let overlay_hwnds = (*app_state_ptr)
+        .overlay_manager
+        .all_hwnds_including_labels();
     register_overlay_hwnds(overlay_hwnds);
 
     // Add tray icon.
@@ -278,7 +284,7 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
         tracing::error!("Tray icon failed: {:?}", e);
     }
 
-    // Register global hotkey.
+    // Register global hotkey (main overlay).
     let mod_flags = config.hotkey_modifiers;
     let vk = config.hotkey_vk;
     match hotkey::register_hotkey(msg_hwnd, mod_flags, vk) {
@@ -293,6 +299,22 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
                     "The shortcut {} is already in use. Right-click the tray icon → Settings to change it.",
                     ks
                 ),
+            );
+        }
+    }
+
+    // Register label mode hotkey.
+    let label_mod_flags = config.label_hotkey_modifiers;
+    let label_vk = config.label_hotkey_vk;
+    match hotkey::register_label_hotkey(msg_hwnd, label_mod_flags, label_vk) {
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!("RegisterLabelHotKey failed: {:?}", e);
+            let ks = hotkey::format_hotkey(label_mod_flags, label_vk);
+            show_balloon(
+                msg_hwnd,
+                "Label Hotkey Conflict",
+                &format!("The label mode shortcut {} is already in use.", ks),
             );
         }
     }
@@ -316,6 +338,7 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
 
     // Cleanup.
     hotkey::unregister_hotkey(msg_hwnd);
+    hotkey::unregister_label_hotkey(msg_hwnd);
     remove_tray_icon(msg_hwnd);
     (*app_state_ptr).mru_tracker.uninstall_hook();
     keyboard_hook::uninstall();
@@ -349,8 +372,11 @@ unsafe extern "system" fn main_wndproc(
         }
 
         WM_HOTKEY => {
-            if wparam.0 as i32 == hotkey::HOTKEY_ID {
+            let hotkey_id = wparam.0 as i32;
+            if hotkey_id == hotkey::HOTKEY_ID {
                 handle_hotkey(app);
+            } else if hotkey_id == hotkey::HOTKEY_ID_LABEL {
+                handle_label_hotkey(app);
             }
             LRESULT(0)
         }
@@ -424,8 +450,19 @@ unsafe extern "system" fn overlay_wndproc(
 
                 // Letter badge font — Segoe UI Bold, large
                 let font = CreateFontW(
-                    22, 0, 0, 0, 700, // height=22, bold
-                    0, 0, 0, 0, 0, 0, 0, 0,
+                    22,
+                    0,
+                    0,
+                    0,
+                    700, // height=22, bold
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
                     windows::core::w!("Segoe UI"),
                 );
                 let old_font = SelectObject(hdc, font);
@@ -461,9 +498,8 @@ unsafe extern "system" fn overlay_wndproc(
 
                     // Aura glow behind badge — soft rounded halo
                     let glow_expand: i32 = if is_selected { 4 } else { 2 };
-                    let glow_brush = CreateSolidBrush(
-                        windows::Win32::Foundation::COLORREF(0x00221100),
-                    );
+                    let glow_brush =
+                        CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00221100));
                     let old_glow = SelectObject(hdc, glow_brush);
                     let _ = RoundRect(
                         hdc,
@@ -635,7 +671,11 @@ unsafe fn handle_hotkey(app: &mut AppState) {
 unsafe fn activate_overlay(app: &mut AppState) {
     app.previous_foreground = {
         let hw = GetForegroundWindow();
-        if hw.is_invalid() { None } else { Some(hw) }
+        if hw.is_invalid() {
+            None
+        } else {
+            Some(hw)
+        }
     };
 
     app.session_tags.release_closed();
@@ -660,6 +700,63 @@ unsafe fn activate_overlay(app: &mut AppState) {
 
 /// Dismiss the overlay without switching to any window; restore previous foreground.
 unsafe fn dismiss_overlay(app: &mut AppState) {
+    let prev = app.previous_foreground.take();
+    app.overlay_manager.begin_hide(&mut app.overlay_state, None);
+    if let Some(prev) = prev {
+        let _ = restore_focus(prev);
+    }
+}
+
+/// Handle label mode hotkey (Win+O).
+unsafe fn handle_label_hotkey(app: &mut AppState) {
+    tracing::debug!("Label mode hotkey received");
+
+    match &app.overlay_state {
+        OverlayState::Hidden => activate_label_mode(app),
+        OverlayState::LabelMode { .. } => {
+            dismiss_label_mode(app);
+        }
+        _ => {}
+    }
+}
+
+/// Activate label mode — show labels on overlay.
+unsafe fn activate_label_mode(app: &mut AppState) {
+    app.previous_foreground = {
+        let hw = GetForegroundWindow();
+        if hw.is_invalid() {
+            None
+        } else {
+            Some(hw)
+        }
+    };
+
+    app.session_tags.release_closed();
+
+    let mon_clone = app.overlay_manager.monitors.clone();
+    app.window_snapshot = snapshot_windows(
+        app.overlay_manager.all_hwnds(),
+        &mon_clone,
+        &app.mru_tracker,
+        &app.session_tags,
+    );
+
+    tracing::info!(
+        "Activating label mode: {} windows",
+        app.window_snapshot.len()
+    );
+
+    // Show overlay in label mode (transparent background with labels only)
+    let snap = app.window_snapshot.clone();
+    app.overlay_manager
+        .show_label_mode(&snap, &mut app.overlay_state);
+
+    // Activate the keyboard hook
+    keyboard_hook::set_active(true);
+}
+
+/// Dismiss label mode without switching to any window.
+unsafe fn dismiss_label_mode(app: &mut AppState) {
     let prev = app.previous_foreground.take();
     app.overlay_manager.begin_hide(&mut app.overlay_state, None);
     if let Some(prev) = prev {
@@ -723,6 +820,17 @@ unsafe fn handle_overlay_key(vk_code: u32) {
     }
     let app = &mut *app_ptr;
 
+    // Check if we're in label mode
+    let is_label_mode = matches!(app.overlay_state, OverlayState::LabelMode { .. });
+
+    tracing::debug!(
+        "Key pressed: vk={} (0x{:X}), label_mode={}, windows={}",
+        vk_code,
+        vk_code,
+        is_label_mode,
+        app.window_snapshot.len()
+    );
+
     let action = handle_key_down(
         vk_code,
         &app.overlay_state,
@@ -731,27 +839,48 @@ unsafe fn handle_overlay_key(vk_code: u32) {
         app.config.direct_switch,
     );
 
+    tracing::debug!("Key action: {:?}", action);
+
     match action {
         KeyAction::None => {}
         KeyAction::Select(idx) => {
-            app.overlay_state = OverlayState::Active { selected: Some(idx) };
-            let snap = app.window_snapshot.clone();
-            app.overlay_manager.redraw(&snap, Some(idx));
+            if is_label_mode {
+                // Update label mode selection
+                app.overlay_state = OverlayState::LabelMode {
+                    selected: Some(idx),
+                };
+                app.overlay_manager.redraw(&app.window_snapshot, Some(idx));
+            } else {
+                // Update overlay selection
+                app.overlay_state = OverlayState::Active {
+                    selected: Some(idx),
+                };
+                let snap = app.window_snapshot.clone();
+                app.overlay_manager.redraw(&snap, Some(idx));
+            }
         }
         KeyAction::SwitchTo(target) => {
-            app.overlay_manager.begin_hide(&mut app.overlay_state, Some(target));
+            // Both modes use the same hide mechanism
+            app.overlay_manager
+                .begin_hide(&mut app.overlay_state, Some(target));
         }
         KeyAction::Dismiss => {
-            dismiss_overlay(app);
+            if is_label_mode {
+                dismiss_label_mode(app);
+            } else {
+                dismiss_overlay(app);
+            }
         }
         KeyAction::TagAssigned => {
             // Refresh number_tag fields from session_tags so the quick list updates
             for w in &mut app.window_snapshot {
                 w.number_tag = app.session_tags.get_tag_for_hwnd(w.hwnd);
             }
-            let sel = app.overlay_state.selected_index();
-            let snap = app.window_snapshot.clone();
-            app.overlay_manager.redraw(&snap, sel);
+            if !is_label_mode {
+                let sel = app.overlay_state.selected_index();
+                let snap = app.window_snapshot.clone();
+                app.overlay_manager.redraw(&snap, sel);
+            }
         }
     }
 }

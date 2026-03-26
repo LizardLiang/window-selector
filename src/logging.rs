@@ -1,8 +1,8 @@
 use std::path::Path;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
-use tracing_subscriber::{fmt, EnvFilter};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, EnvFilter};
 
 /// Initialize the logging subsystem.
 /// Writes to rolling files in the given logs directory.
@@ -32,8 +32,7 @@ pub fn init_logging(logs_dir: &Path, console: bool) -> Result<(), Box<dyn std::e
         "window_selector=info,warn,error"
     };
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(filter_str));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter_str));
 
     if console {
         let stderr_layer = fmt::layer()

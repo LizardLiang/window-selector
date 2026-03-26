@@ -1,15 +1,11 @@
 use crate::mru_tracker::MruTracker;
 use crate::window_info::WindowInfo;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
-use windows::Win32::Graphics::Dwm::{
-    DwmGetWindowAttribute, DWMWA_CLOAKED,
-};
-use windows::Win32::Graphics::Gdi::{
-    MonitorFromWindow, MONITOR_DEFAULTTONEAREST,
-};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetShellWindow, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW,
-    IsIconic, IsWindowVisible, GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    EnumWindows, GetShellWindow, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW, IsIconic,
+    IsWindowVisible, GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
 };
 
 /// Set of overlay HWNDs to exclude from the window snapshot.
@@ -44,10 +40,7 @@ pub fn enumerate_windows(
     let ctx_ptr = &mut ctx as *mut EnumContext;
 
     unsafe {
-        let _ = EnumWindows(
-            Some(enum_windows_callback),
-            LPARAM(ctx_ptr as isize),
-        );
+        let _ = EnumWindows(Some(enum_windows_callback), LPARAM(ctx_ptr as isize));
     }
 
     // Filter out our own overlay HWNDs
@@ -117,7 +110,8 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> B
         .position(|m| m.handle == monitor_handle)
         .unwrap_or(0);
 
-    ctx.windows.push(WindowInfo::new(hwnd, title, is_minimized, monitor_index));
+    ctx.windows
+        .push(WindowInfo::new(hwnd, title, is_minimized, monitor_index));
 
     BOOL(1) // Continue enumeration
 }
@@ -144,10 +138,7 @@ pub fn snapshot_windows(
         window.icon = crate::window_icon::get_window_icon(window.hwnd);
     }
 
-    tracing::debug!(
-        "Window snapshot: {} windows",
-        windows.len()
-    );
+    tracing::debug!("Window snapshot: {} windows", windows.len());
     for w in &windows {
         tracing::debug!(
             "  {:?} letter={:?} tag={:?} minimized={} title={:?}",

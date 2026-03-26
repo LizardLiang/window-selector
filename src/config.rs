@@ -14,16 +14,24 @@ pub struct AppConfig {
     /// When false (default), letter selects and Enter/Space confirms.
     #[serde(default)]
     pub direct_switch: bool,
+    /// Label mode hotkey modifier flags (MOD_WIN etc.)
+    pub label_hotkey_modifiers: u32,
+    /// Label mode hotkey virtual key code (e.g., VK_O = 0x4F)
+    pub label_hotkey_vk: u32,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            // MOD_CONTROL (0x0002) | MOD_ALT (0x0001) | MOD_NOREPEAT (0x4000)
+            // Main overlay: MOD_CONTROL (0x0002) | MOD_ALT (0x0001) | MOD_NOREPEAT (0x4000)
             hotkey_modifiers: 0x0002 | 0x0001 | 0x4000,
-            // VK_SPACE = 0x20
-            hotkey_vk: 0x20,
+            // VK_Q = 0x51 (Ctrl+Alt+Q)
+            hotkey_vk: 0x51,
             direct_switch: false,
+            // Label mode: MOD_WIN (0x0008) | MOD_NOREPEAT (0x4000)
+            label_hotkey_modifiers: 0x0008 | 0x4000,
+            // VK_Y = 0x59 (Win+Y)
+            label_hotkey_vk: 0x59,
         }
     }
 }
@@ -106,8 +114,10 @@ mod tests {
         let dir = temp_dir();
         let config = AppConfig::load(&dir).expect("load should succeed");
         assert_eq!(config.hotkey_modifiers, 0x0002 | 0x0001 | 0x4000);
-        assert_eq!(config.hotkey_vk, 0x20); // VK_SPACE
-        // Cleanup
+        assert_eq!(config.hotkey_vk, 0x51); // VK_Q
+        assert_eq!(config.label_hotkey_modifiers, 0x0008 | 0x4000);
+        assert_eq!(config.label_hotkey_vk, 0x59); // VK_Y
+                                                  // Cleanup
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -136,7 +146,7 @@ mod tests {
         fs::write(&config_path, b"not valid toml {{{{").expect("write corrupt");
         let config = AppConfig::load(&dir).expect("should return defaults, not error");
         assert_eq!(config.hotkey_vk, 0x20); // Default VK_SPACE
-        // Cleanup
+                                            // Cleanup
         let _ = fs::remove_dir_all(&dir);
     }
 

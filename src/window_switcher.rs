@@ -1,8 +1,6 @@
 use std::time::Instant;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::System::Threading::{
-    AttachThreadInput, GetCurrentThreadId,
-};
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, BringWindowToTop, GetWindowThreadProcessId, IsIconic,
     SetForegroundWindow, ShowWindow, SW_RESTORE,
@@ -23,9 +21,7 @@ impl Drop for ThreadInputGuard {
         // SAFETY: We only construct this guard after a successful attach, so detaching
         // here is always paired with the earlier attach. Both thread IDs are valid for
         // the process lifetime.
-        let ok = unsafe {
-            AttachThreadInput(self.our_thread, self.target_thread, false).as_bool()
-        };
+        let ok = unsafe { AttachThreadInput(self.our_thread, self.target_thread, false).as_bool() };
         if !ok {
             tracing::warn!(
                 "AttachThreadInput detach failed (our={}, target={})",
@@ -55,7 +51,10 @@ pub fn switch_to_window(hwnd: HWND) -> windows::core::Result<()> {
 
         if SetForegroundWindow(hwnd).as_bool() {
             let elapsed = start.elapsed();
-            tracing::debug!("switch_to_window succeeded via AllowSetForegroundWindow in {:?}", elapsed);
+            tracing::debug!(
+                "switch_to_window succeeded via AllowSetForegroundWindow in {:?}",
+                elapsed
+            );
             return Ok(());
         }
 
@@ -76,7 +75,10 @@ pub fn switch_to_window(hwnd: HWND) -> windows::core::Result<()> {
             }
             // Create the guard regardless of whether attach succeeded; a failed attach
             // means the detach will also fail silently, which is harmless.
-            Some(ThreadInputGuard { our_thread, target_thread })
+            Some(ThreadInputGuard {
+                our_thread,
+                target_thread,
+            })
         } else {
             None
         };
@@ -88,7 +90,10 @@ pub fn switch_to_window(hwnd: HWND) -> windows::core::Result<()> {
         let elapsed = start.elapsed();
 
         if result.as_bool() {
-            tracing::debug!("switch_to_window succeeded via AttachThreadInput in {:?}", elapsed);
+            tracing::debug!(
+                "switch_to_window succeeded via AttachThreadInput in {:?}",
+                elapsed
+            );
         } else {
             tracing::warn!(
                 "switch_to_window: SetForegroundWindow failed for HWND {:?} (elapsed: {:?})",

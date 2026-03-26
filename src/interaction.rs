@@ -2,9 +2,8 @@ use crate::state::{OverlayState, SessionTags};
 use crate::window_info::WindowInfo;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_CONTROL, VK_RETURN, VK_SPACE, VK_ESCAPE,
-    VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9,
-    VK_A, VK_Z,
+    GetAsyncKeyState, VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A, VK_CONTROL,
+    VK_ESCAPE, VK_RETURN, VK_SPACE, VK_Z,
 };
 // VK_0 is used only in tests
 #[cfg(test)]
@@ -30,6 +29,7 @@ pub fn handle_hotkey_event(state: &OverlayState) -> HotkeyAction {
         OverlayState::Hidden => HotkeyAction::Activate,
         OverlayState::FadingIn | OverlayState::Active { .. } => HotkeyAction::Dismiss,
         OverlayState::FadingOut { .. } => HotkeyAction::None,
+        OverlayState::LabelMode { .. } => HotkeyAction::None, // Label mode uses its own hotkey
     }
 }
 
@@ -37,7 +37,10 @@ pub fn handle_hotkey_event(state: &OverlayState) -> HotkeyAction {
 /// Returns true if the overlay should be dismissed.
 #[allow(dead_code)]
 pub fn handle_focus_lost(state: &OverlayState) -> bool {
-    matches!(state, OverlayState::Active { .. } | OverlayState::FadingIn)
+    matches!(
+        state,
+        OverlayState::Active { .. } | OverlayState::FadingIn | OverlayState::LabelMode { .. }
+    )
 }
 
 /// Result of processing a key event.
@@ -86,7 +89,10 @@ pub fn handle_key_down(
     if let Some(num) = vk_to_digit(vk_code) {
         if ctrl_held {
             // Ctrl+Number: assign tag to selected window
-            if let OverlayState::Active { selected: Some(idx) } = state {
+            if let OverlayState::Active {
+                selected: Some(idx),
+            } = state
+            {
                 if let Some(window) = windows.get(*idx) {
                     // Clear any previous holder of this tag
                     tags.assign(num, window.hwnd);
@@ -97,7 +103,9 @@ pub fn handle_key_down(
         } else {
             // Number key alone: switch to tagged window
             if let Some(tagged_hwnd) = tags.get(num) {
-                if unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(tagged_hwnd).as_bool() } {
+                if unsafe {
+                    windows::Win32::UI::WindowsAndMessaging::IsWindow(tagged_hwnd).as_bool()
+                } {
                     return KeyAction::SwitchTo(tagged_hwnd);
                 } else {
                     tags.remove_by_hwnd(tagged_hwnd);
@@ -107,7 +115,7 @@ pub fn handle_key_down(
         return KeyAction::None;
     }
 
-    // Letter keys (a-z) — select or switch to a window
+    // Letter keys (a-z) — select or switch to a window (or switch directly in label mode)
     // When Ctrl is held, always select (never direct-switch) so the user
     // can Ctrl+Letter to select, then Ctrl+Number to assign a quick-list tag.
     if let Some(letter) = vk_to_letter(vk_code) {
@@ -117,6 +125,13 @@ pub fn handle_key_down(
                     return KeyAction::SwitchTo(window.hwnd);
                 }
             }
+            // In label mode, pressing a letter directly switches to that window
+            if matches!(state, OverlayState::LabelMode { .. }) {
+                if let Some(window) = windows.get(idx) {
+                    return KeyAction::SwitchTo(window.hwnd);
+                }
+            }
+            // In overlay mode, pressing a letter selects the window
             return KeyAction::Select(idx);
         }
         // Unassigned letter: no-op
@@ -125,10 +140,18 @@ pub fn handle_key_down(
 
     // Enter or Space: confirm switch
     if vk_code == VK_RETURN.0 as u32 || vk_code == VK_SPACE.0 as u32 {
-        if let OverlayState::Active { selected: Some(idx) } = state {
-            if let Some(window) = windows.get(*idx) {
-                return KeyAction::SwitchTo(window.hwnd);
+        match state {
+            OverlayState::Active {
+                selected: Some(idx),
             }
+            | OverlayState::LabelMode {
+                selected: Some(idx),
+            } => {
+                if let Some(window) = windows.get(*idx) {
+                    return KeyAction::SwitchTo(window.hwnd);
+                }
+            }
+            _ => {}
         }
         return KeyAction::None;
     }
@@ -171,8 +194,8 @@ fn vk_to_letter(vk: u32) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::window_info::WindowInfo;
     use crate::state::SessionTags;
+    use crate::window_info::WindowInfo;
 
     fn hwnd(n: isize) -> HWND {
         HWND(n as *mut _)
@@ -190,10 +213,7 @@ mod tests {
 
     #[test]
     fn test_letter_key_selects_window() {
-        let windows = vec![
-            make_window_info(1, 'a'),
-            make_window_info(2, 's'),
-        ];
+        let windows = vec![make_window_info(1, 'a'), make_window_info(2, 's')];
         let mut tags = SessionTags::new();
         let state = active_state(None);
 
@@ -236,7 +256,9 @@ mod tests {
     fn test_fading_out_ignores_input() {
         let windows: Vec<WindowInfo> = vec![];
         let mut tags = SessionTags::new();
-        let state = OverlayState::FadingOut { switch_target: None };
+        let state = OverlayState::FadingOut {
+            switch_target: None,
+        };
         let action = handle_key_down(VK_ESCAPE.0 as u32, &state, &windows, &mut tags, false);
         assert!(matches!(action, KeyAction::None));
     }
@@ -347,11 +369,7 @@ mod tests {
         let h = hwnd(55);
         let mut w = WindowInfo::new(h, "Tagged Window".into(), false, 0);
         w.letter = Some('a');
-        let windows = vec![
-            make_window_info(10, 'b'),
-            make_window_info(11, 'c'),
-            w,
-        ];
+        let windows = vec![make_window_info(10, 'b'), make_window_info(11, 'c'), w];
         let mut tags = SessionTags::new();
         // State: window at index 2 is selected
         let state = active_state(Some(2));
@@ -377,7 +395,8 @@ mod tests {
         );
         // Also verify that without ctrl, a number key produces None or SwitchTo (not TagAssigned)
         // when no tag is set for that number.
-        let action_no_ctrl = handle_key_down(VK_1.0 as u32, &state, &windows, &mut SessionTags::new(), false);
+        let action_no_ctrl =
+            handle_key_down(VK_1.0 as u32, &state, &windows, &mut SessionTags::new(), false);
         // With an empty tags store and no Ctrl, pressing 1 should produce None (no tagged window).
         assert!(
             matches!(action_no_ctrl, KeyAction::None),
@@ -397,9 +416,9 @@ mod tests {
         let windows = vec![make_window_info(1, 'a')];
         let mut tags = SessionTags::new();
         let state = active_state(None); // No selection
-        // Even if GetKeyState returned ctrl-held (which it won't in test),
-        // the guard `if let OverlayState::Active { selected: Some(idx) }` prevents assignment.
-        // Simulate by calling handle_key_down and verifying tags remains empty.
+                                        // Even if GetKeyState returned ctrl-held (which it won't in test),
+                                        // the guard `if let OverlayState::Active { selected: Some(idx) }` prevents assignment.
+                                        // Simulate by calling handle_key_down and verifying tags remains empty.
         let action = handle_key_down(VK_1.0 as u32, &state, &windows, &mut tags, false);
         // Without ctrl (which GetKeyState returns as not-held in tests), this is a number
         // switch path; tags is empty so result is None.
@@ -409,7 +428,11 @@ mod tests {
             action
         );
         // Tags should remain empty — no assignment happened.
-        assert_eq!(tags.all_tags().len(), 0, "No tags should have been assigned");
+        assert_eq!(
+            tags.all_tags().len(),
+            0,
+            "No tags should have been assigned"
+        );
     }
 
     // --- TC-4.17: Number key (no modifier) switches to tagged window ---

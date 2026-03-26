@@ -4,9 +4,9 @@ use crate::window_info::WindowInfo;
 /// Most-recently-used window gets 'a', second gets 's', etc.
 pub const LETTER_SEQUENCE: [char; 26] = [
     'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', // home row (9)
-    'q', 'w', 'e', 'r', 't',                        // top row left (5)
-    'y', 'u', 'i', 'o', 'p',                        // top row right (5)
-    'z', 'x', 'c', 'v', 'b', 'n', 'm',             // bottom row (7)
+    'q', 'w', 'e', 'r', 't', // top row left (5)
+    'y', 'u', 'i', 'o', 'p', // top row right (5)
+    'z', 'x', 'c', 'v', 'b', 'n', 'm', // bottom row (7)
 ];
 
 /// Assign letters to windows in order. Windows beyond position 26 receive None.
@@ -32,7 +32,14 @@ mod tests {
 
     fn make_windows(n: usize) -> Vec<WindowInfo> {
         (0..n)
-            .map(|i| WindowInfo::new(HWND(i as isize as *mut _), format!("Window {}", i), false, 0))
+            .map(|i| {
+                WindowInfo::new(
+                    HWND(i as isize as *mut _),
+                    format!("Window {}", i),
+                    false,
+                    0,
+                )
+            })
             .collect()
     }
 
@@ -70,7 +77,11 @@ mod tests {
         let mut windows = make_windows(30);
         assign_letters(&mut windows);
         for i in 0..26 {
-            assert!(windows[i].letter.is_some(), "Index {} should have a letter", i);
+            assert!(
+                windows[i].letter.is_some(),
+                "Index {} should have a letter",
+                i
+            );
         }
         for i in 26..30 {
             assert_eq!(windows[i].letter, None, "Index {} should have None", i);

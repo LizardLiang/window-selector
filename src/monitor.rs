@@ -2,17 +2,17 @@ use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
 };
-use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
 
 /// Physical monitor descriptor.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct MonitorInfo {
     pub handle: HMONITOR,
-    pub rect: RECT,       // Screen coordinates (physical pixels)
-    pub work_rect: RECT,  // Excluding taskbar
-    pub dpi_scale: f32,   // e.g., 1.0, 1.25, 1.5, 2.0
+    pub rect: RECT,      // Screen coordinates (physical pixels)
+    pub work_rect: RECT, // Excluding taskbar
+    pub dpi_scale: f32,  // e.g., 1.0, 1.25, 1.5, 2.0
     pub is_primary: bool,
 }
 

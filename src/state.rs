@@ -20,6 +20,11 @@ pub enum OverlayState {
         /// The HWND to focus after fade-out completes, if any.
         switch_target: Option<HWND>,
     },
+    /// Label mode is active — small labels shown above each window title bar.
+    LabelMode {
+        /// Index of the currently highlighted window in the snapshot, if any.
+        selected: Option<usize>,
+    },
 }
 
 impl OverlayState {
@@ -34,11 +39,16 @@ impl OverlayState {
     }
 
     pub fn selected_index(&self) -> Option<usize> {
-        if let OverlayState::Active { selected } = self {
-            *selected
-        } else {
-            None
+        match self {
+            OverlayState::Active { selected } => *selected,
+            OverlayState::LabelMode { selected } => *selected,
+            _ => None,
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn is_label_mode(&self) -> bool {
+        matches!(self, OverlayState::LabelMode { .. })
     }
 }
 
@@ -67,15 +77,13 @@ impl SessionTags {
 
     /// Get the tag number assigned to the given HWND, if any.
     pub fn get_tag_for_hwnd(&self, hwnd: HWND) -> Option<u8> {
-        self.tags
-            .iter()
-            .find(|(_, &h)| h == hwnd)
-            .map(|(&n, _)| n)
+        self.tags.iter().find(|(_, &h)| h == hwnd).map(|(&n, _)| n)
     }
 
     /// Remove tags pointing to windows that are no longer valid.
     pub fn release_closed(&mut self) {
-        self.tags.retain(|_, hwnd| unsafe { IsWindow(*hwnd).as_bool() });
+        self.tags
+            .retain(|_, hwnd| unsafe { IsWindow(*hwnd).as_bool() });
     }
 
     /// Remove the tag for a specific HWND.
@@ -169,7 +177,9 @@ mod tests {
 
     #[test]
     fn test_overlay_state_fading_out() {
-        let state = OverlayState::FadingOut { switch_target: None };
+        let state = OverlayState::FadingOut {
+            switch_target: None,
+        };
         assert!(!state.is_active());
         assert!(state.is_visible());
     }

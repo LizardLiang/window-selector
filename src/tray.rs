@@ -5,9 +5,9 @@ use windows::Win32::UI::Shell::{
     NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, SetForegroundWindow,
-    TrackPopupMenu, MF_CHECKED, MF_SEPARATOR,
-    MF_STRING, MF_UNCHECKED, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, SetForegroundWindow, TrackPopupMenu,
+    MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TPM_RETURNCMD,
 };
 
 /// Custom Windows message used for tray icon callbacks.
@@ -74,13 +74,17 @@ pub fn show_balloon(hwnd: HWND, title: &str, text: &str) {
     unsafe {
         let mut balloon_title = [0u16; 64];
         for (i, c) in title.encode_utf16().enumerate() {
-            if i >= balloon_title.len() - 1 { break; }
+            if i >= balloon_title.len() - 1 {
+                break;
+            }
             balloon_title[i] = c;
         }
 
         let mut balloon_text = [0u16; 256];
         for (i, c) in text.encode_utf16().enumerate() {
-            if i >= balloon_text.len() - 1 { break; }
+            if i >= balloon_text.len() - 1 {
+                break;
+            }
             balloon_text[i] = c;
         }
 
@@ -113,16 +117,35 @@ pub fn show_context_menu(hwnd: HWND, direct_switch: bool) -> u32 {
         };
 
         let direct_switch_w: Vec<u16> = "Switch on key press\0".encode_utf16().collect();
-        let check_flag = if direct_switch { MF_CHECKED } else { MF_UNCHECKED };
-        let _ = AppendMenuW(menu, MF_STRING | check_flag, MENU_DIRECT_SWITCH as usize, PCWSTR(direct_switch_w.as_ptr()));
+        let check_flag = if direct_switch {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING | check_flag,
+            MENU_DIRECT_SWITCH as usize,
+            PCWSTR(direct_switch_w.as_ptr()),
+        );
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
         let settings_w: Vec<u16> = "Settings...\0".encode_utf16().collect();
         let about_w: Vec<u16> = "About\0".encode_utf16().collect();
         let exit_w: Vec<u16> = "Exit\0".encode_utf16().collect();
 
-        let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS as usize, PCWSTR(settings_w.as_ptr()));
-        let _ = AppendMenuW(menu, MF_STRING, MENU_ABOUT as usize, PCWSTR(about_w.as_ptr()));
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            MENU_SETTINGS as usize,
+            PCWSTR(settings_w.as_ptr()),
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            MENU_ABOUT as usize,
+            PCWSTR(about_w.as_ptr()),
+        );
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, MENU_EXIT as usize, PCWSTR(exit_w.as_ptr()));
 
