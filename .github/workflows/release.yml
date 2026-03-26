@@ -43,6 +43,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Build release binary
         run: cargo build --release --target x86_64-pc-windows-msvc
 

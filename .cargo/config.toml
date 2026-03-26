@@ -1,2 +1,8 @@
+[target.x86_64-pc-windows-msvc]
+linker = "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\SDK\\ScopeCppSDK\\vc15\\VC\\bin\\link.exe"
+
+[env]
+LIB = "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\SDK\\ScopeCppSDK\\vc15\\SDK\\lib;C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\SDK\\ScopeCppSDK\\vc15\\VC\\lib"
+
 [build]
 target = "x86_64-pc-windows-msvc"
