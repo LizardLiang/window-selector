@@ -3,12 +3,28 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS,
 };
 
-/// The hotkey ID used with RegisterHotKey.
+/// The hotkey ID used with RegisterHotKey for the main overlay.
 pub const HOTKEY_ID: i32 = 1;
+
+/// The hotkey ID used with RegisterHotKey for label mode.
+pub const HOTKEY_ID_LABEL: i32 = 2;
 
 /// Register the global activation hotkey.
 /// Returns Ok(()) on success, Err on failure (conflict with another app).
-pub fn register_hotkey(
+pub fn register_hotkey(msg_hwnd: HWND, modifiers: u32, vk_code: u32) -> windows::core::Result<()> {
+    unsafe {
+        RegisterHotKey(msg_hwnd, HOTKEY_ID, HOT_KEY_MODIFIERS(modifiers), vk_code)?;
+        tracing::info!(
+            "Hotkey registered: modifiers=0x{:X} vk=0x{:X}",
+            modifiers,
+            vk_code
+        );
+        Ok(())
+    }
+}
+
+/// Register the label mode hotkey.
+pub fn register_label_hotkey(
     msg_hwnd: HWND,
     modifiers: u32,
     vk_code: u32,
@@ -16,12 +32,12 @@ pub fn register_hotkey(
     unsafe {
         RegisterHotKey(
             msg_hwnd,
-            HOTKEY_ID,
+            HOTKEY_ID_LABEL,
             HOT_KEY_MODIFIERS(modifiers),
             vk_code,
         )?;
         tracing::info!(
-            "Hotkey registered: modifiers=0x{:X} vk=0x{:X}",
+            "Label hotkey registered: modifiers=0x{:X} vk=0x{:X}",
             modifiers,
             vk_code
         );
@@ -34,6 +50,14 @@ pub fn unregister_hotkey(msg_hwnd: HWND) {
     unsafe {
         let _ = UnregisterHotKey(msg_hwnd, HOTKEY_ID);
         tracing::info!("Hotkey unregistered");
+    }
+}
+
+/// Unregister the label mode hotkey.
+pub fn unregister_label_hotkey(msg_hwnd: HWND) {
+    unsafe {
+        let _ = UnregisterHotKey(msg_hwnd, HOTKEY_ID_LABEL);
+        tracing::info!("Label hotkey unregistered");
     }
 }
 

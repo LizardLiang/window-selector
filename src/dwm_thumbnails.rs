@@ -3,8 +3,8 @@ use crate::window_info::WindowInfo;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{
     DwmQueryThumbnailSourceSize, DwmRegisterThumbnail, DwmUnregisterThumbnail,
-    DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION,
-    DWM_TNP_OPACITY, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
+    DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY,
+    DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 
 /// A registered DWM thumbnail with its source window and destination cell.
@@ -107,7 +107,10 @@ pub fn register_thumbnails(
                 });
 
                 let props = DWM_THUMBNAIL_PROPERTIES {
-                    dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY,
+                    dwFlags: DWM_TNP_RECTDESTINATION
+                        | DWM_TNP_VISIBLE
+                        | DWM_TNP_OPACITY
+                        | DWM_TNP_SOURCECLIENTAREAONLY,
                     rcDestination: dest_rect,
                     rcSource: RECT::default(),
                     opacity: 255,
@@ -136,16 +139,15 @@ pub fn register_thumbnails(
         }
     }
 
-    ThumbnailRegistration { handles, thumb_bounds }
+    ThumbnailRegistration {
+        handles,
+        thumb_bounds,
+    }
 }
 
 /// Update thumbnail destination rects (e.g., on selection change causing scale-up).
 #[allow(dead_code)]
-pub fn update_thumbnail_dest(
-    handle: &ThumbnailHandle,
-    cell: &CellRect,
-    opacity: u8,
-) {
+pub fn update_thumbnail_dest(handle: &ThumbnailHandle, cell: &CellRect, opacity: u8) {
     if handle.thumbnail_id == 0 || handle.is_blank {
         return;
     }
@@ -154,7 +156,10 @@ pub fn update_thumbnail_dest(
         let thumbnail_id = handle.thumbnail_id;
         let dest_rect = cell_to_rect(cell);
         let props = DWM_THUMBNAIL_PROPERTIES {
-            dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY,
+            dwFlags: DWM_TNP_RECTDESTINATION
+                | DWM_TNP_VISIBLE
+                | DWM_TNP_OPACITY
+                | DWM_TNP_SOURCECLIENTAREAONLY,
             rcDestination: dest_rect,
             rcSource: RECT::default(),
             opacity,

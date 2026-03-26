@@ -1,10 +1,6 @@
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Accessibility::{
-    SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK,
-};
-use windows::Win32::UI::WindowsAndMessaging::{
-    EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT,
-};
+use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
+use windows::Win32::UI::WindowsAndMessaging::{EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT};
 
 /// Maximum number of entries in the MRU list.
 const MRU_MAX_SIZE: usize = 100;

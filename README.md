@@ -37,14 +37,15 @@ cargo run                # Debug
 cargo run --release      # Release
 ```
 
-The application starts minimized to the system tray. Press the activation hotkey (default: **Ctrl+Alt+Space**) to open the overlay.
+The application starts minimized to the system tray. Press the activation hotkey (default: **Ctrl+Alt+Q**) to open the overlay, or **Win+Y** for label mode.
 
 ## Usage
 
 | Action | Key |
 |--------|-----|
-| Open overlay | Ctrl+Alt+Space (configurable) |
-| Select a window | Press the letter shown on its thumbnail |
+| Open overlay (full-screen grid) | Ctrl+Alt+Q (configurable) |
+| Open label mode (quick labels) | Win+Y (configurable) |
+| Select a window | Press the letter shown on its thumbnail/label |
 | Switch to selected window | Enter or Space |
 | Dismiss overlay | Escape |
 | Tag a window with a number | Ctrl+1 through Ctrl+9 (while a window is selected) |
@@ -68,8 +69,10 @@ The most recently used window gets **A**, the second gets **S**, and so on. Up t
 Config file: `%APPDATA%\window-selector\config.toml`
 
 ```toml
-hotkey_modifiers = 16387   # MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
-hotkey_vk = 32             # VK_SPACE
+hotkey_modifiers = 16387   # MOD_WIN | MOD_NOREPEAT
+hotkey_vk = 81             # VK_Q (Ctrl+Alt+Q for overlay)
+label_hotkey_modifiers = 16387   # MOD_WIN | MOD_NOREPEAT
+label_hotkey_vk = 89             # VK_Y (Win+Y for label mode)
 ```
 
 Logs are written to `%APPDATA%\window-selector\logs\`.
@@ -145,14 +148,15 @@ cargo run                # Debug
 cargo run --release      # Release
 ```
 
-程式啟動後會最小化至系統匣。按下啟動快捷鍵（預設：**Ctrl+Alt+Space**）即可開啟覆蓋層。
+程式啟動後會最小化至系統匣。按下啟動快捷鍵（預設：**Ctrl+Alt+Q** 開啟覆蓋層，**Win+Y** 開啟標籤模式）。
 
 ## 使用方式
 
 | 操作 | 按鍵 |
 |------|------|
-| 開啟覆蓋層 | Ctrl+Alt+Space（可自訂） |
-| 選取視窗 | 按縮圖上顯示的字母 |
+| 開啟覆蓋層（全螢幕方格） | Ctrl+Alt+Q（可自訂） |
+| 開啟標籤模式（快速標籤） | Win+Y（可自訂） |
+| 選取視窗 | 按縮圖/標籤上顯示的字母 |
 | 切換至選取的視窗 | Enter 或 Space |
 | 關閉覆蓋層 | Escape |
 | 為視窗加上數字標籤 | Ctrl+1 到 Ctrl+9（需先選取視窗） |
@@ -176,8 +180,10 @@ z x c v b n m        （下排）
 設定檔位置：`%APPDATA%\window-selector\config.toml`
 
 ```toml
-hotkey_modifiers = 16387   # MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
-hotkey_vk = 32             # VK_SPACE
+hotkey_modifiers = 16387   # MOD_WIN | MOD_NOREPEAT
+hotkey_vk = 81             # VK_Q（Ctrl+Alt+Q 開啟覆蓋層）
+label_hotkey_modifiers = 16387   # MOD_WIN | MOD_NOREPEAT
+label_hotkey_vk = 89             # VK_Y（Win+Y 開啟標籤模式）
 ```
 
 日誌寫入 `%APPDATA%\window-selector\logs\`。

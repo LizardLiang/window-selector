@@ -70,7 +70,15 @@ pub fn compute_grid(window_count: usize, area_width: f32, area_height: f32) -> G
     let target_cols = (n.sqrt().ceil() as usize).max(1);
 
     // Find best column count that satisfies minimum cell size
-    let cols = find_best_cols(window_count, target_cols, area_width, area_height, PADDING, MIN_CELL_WIDTH, MIN_CELL_HEIGHT);
+    let cols = find_best_cols(
+        window_count,
+        target_cols,
+        area_width,
+        area_height,
+        PADDING,
+        MIN_CELL_WIDTH,
+        MIN_CELL_HEIGHT,
+    );
     let rows = ((window_count as f32) / cols as f32).ceil() as usize;
 
     let cell_width = (area_width - PADDING * (cols + 1) as f32) / cols as f32;
@@ -152,8 +160,16 @@ mod tests {
         assert_eq!(layout.cells.len(), 1);
         let cell = &layout.cells[0];
         // With 1 window, cell should be very large
-        assert!(cell.width >= 1400.0, "Cell width {} should be >= 1400", cell.width);
-        assert!(cell.height >= 700.0, "Cell height {} should be >= 700", cell.height);
+        assert!(
+            cell.width >= 1400.0,
+            "Cell width {} should be >= 1400",
+            cell.width
+        );
+        assert!(
+            cell.height >= 700.0,
+            "Cell height {} should be >= 700",
+            cell.height
+        );
     }
 
     #[test]

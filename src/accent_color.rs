@@ -35,7 +35,8 @@ impl AccentColor {
 pub fn get_accent_color() -> AccentColor {
     unsafe {
         let mut color_ref: u32 = 0;
-        let mut opaque_blend: windows::Win32::Foundation::BOOL = windows::Win32::Foundation::BOOL(0);
+        let mut opaque_blend: windows::Win32::Foundation::BOOL =
+            windows::Win32::Foundation::BOOL(0);
 
         if DwmGetColorizationColor(&mut color_ref, &mut opaque_blend).is_ok() {
             // DWM returns ARGB as 0xAARRGGBB

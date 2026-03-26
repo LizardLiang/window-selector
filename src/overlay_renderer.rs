@@ -3,25 +3,22 @@ use crate::grid_layout::{CellRect, QUICK_LIST_BAR_HEIGHT};
 use crate::window_info::WindowInfo;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_COLOR_F, D2D_RECT_F, D2D_SIZE_U,
-};
+use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget,
-    ID2D1SolidColorBrush,
-    D2D1_DRAW_TEXT_OPTIONS_CLIP,
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE,
+    D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
+    D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
+    D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
-    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD,
-    DWRITE_FONT_WEIGHT_REGULAR, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD,
+    DWRITE_FONT_WEIGHT_REGULAR, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_LEADING,
 };
-use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetClientRect, GetSystemMetrics, GetWindowRect, SM_CXPADDEDBORDER, SM_CXSIZEFRAME,
+};
 
 // Cell rendering constants — logical sizes scaled by DPI in draw_cell().
 const LABEL_FONT_SIZE: f32 = 18.0;
@@ -53,6 +50,14 @@ const QUICK_LIST_PILL_RADIUS: f32 = 4.0;
 const QUICK_LIST_TAG_SIZE: f32 = 16.0;
 /// Separator bar between grid area and quick list.
 const QUICK_LIST_SEPARATOR_HEIGHT: f32 = 1.0;
+
+// Label mode constants — for small labels above window title bars
+/// Width of each label in label mode (physical pixels).
+const LABEL_MODE_WIDTH: f32 = 60.0;
+/// Height of each label in label mode (physical pixels).
+const LABEL_MODE_HEIGHT: f32 = 48.0;
+/// Corner radius for label mode badges.
+const LABEL_MODE_CORNER_RADIUS: f32 = 8.0;
 
 /// The Direct2D + DirectWrite rendering context for an overlay window.
 #[allow(dead_code)]
@@ -105,8 +110,7 @@ impl OverlayRenderer {
                 D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
 
             // DWrite factory
-            let dwrite_factory: IDWriteFactory =
-                DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+            let dwrite_factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
 
             // Get client rect
             let mut client_rect = RECT::default();
@@ -116,9 +120,15 @@ impl OverlayRenderer {
 
             // Create HwndRenderTarget — force 96 DPI so coordinates map 1:1
             // to physical pixels (matching grid cells and DWM thumbnail rects).
+            // Enable alpha mode for transparent background support.
             let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
                 dpiX: 96.0,
                 dpiY: 96.0,
+                pixelFormat: windows::Win32::Graphics::Direct2D::Common::D2D1_PIXEL_FORMAT {
+                    format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode:
+                        windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
                 ..Default::default()
             };
             let hwnd_rt_props = D2D1_HWND_RENDER_TARGET_PROPERTIES {
@@ -129,106 +139,63 @@ impl OverlayRenderer {
 
             let render_target = d2d_factory.CreateHwndRenderTarget(&rt_props, &hwnd_rt_props)?;
 
-            render_target
-                .SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
+            render_target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
 
             // Create brushes — refined dark palette with subtle cool tint
-            let backdrop_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(0.02, 0.03, 0.06, 0.86),
-                None,
-            )?;
-            let cell_bg_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(0.07, 0.08, 0.12, 0.95),
-                None,
-            )?;
-            let cell_border_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 1.0, 1.0, 0.07),
-                None,
-            )?;
-            let text_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 1.0, 1.0, 0.95),
-                None,
-            )?;
+            let backdrop_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(0.02, 0.03, 0.06, 0.86), None)?;
+            let cell_bg_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(0.07, 0.08, 0.12, 0.95), None)?;
+            let cell_border_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(1.0, 1.0, 1.0, 0.07), None)?;
+            let text_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(1.0, 1.0, 1.0, 0.95), None)?;
             // Frosted glass pill for unselected letter labels.
-            let label_semi_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 1.0, 1.0, 0.12),
-                None,
-            )?;
+            let label_semi_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(1.0, 1.0, 1.0, 0.12), None)?;
             // White text on frosted glass pill.
-            let label_dark_text_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 1.0, 1.0, 0.92),
-                None,
-            )?;
-            let label_accent_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(accent.r, accent.g, accent.b, 0.90),
-                None,
-            )?;
-            let selection_border_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(accent.r, accent.g, accent.b, 0.85),
-                None,
-            )?;
-            let selection_fill_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(accent.r, accent.g, accent.b, 0.10),
-                None,
-            )?;
+            let label_dark_text_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(1.0, 1.0, 1.0, 0.92), None)?;
+            let label_accent_brush = render_target
+                .CreateSolidColorBrush(&d2d_color(accent.r, accent.g, accent.b, 0.90), None)?;
+            let selection_border_brush = render_target
+                .CreateSolidColorBrush(&d2d_color(accent.r, accent.g, accent.b, 0.85), None)?;
+            let selection_fill_brush = render_target
+                .CreateSolidColorBrush(&d2d_color(accent.r, accent.g, accent.b, 0.10), None)?;
             // Aura glow layers — concentric bloom rings around selected cells
-            let aura_brush_1 = render_target.CreateSolidColorBrush(
-                &d2d_color(accent.r, accent.g, accent.b, 0.25),
-                None,
-            )?;
-            let aura_brush_2 = render_target.CreateSolidColorBrush(
-                &d2d_color(accent.r, accent.g, accent.b, 0.14),
-                None,
-            )?;
-            let aura_brush_3 = render_target.CreateSolidColorBrush(
-                &d2d_color(accent.r, accent.g, accent.b, 0.07),
-                None,
-            )?;
+            let aura_brush_1 = render_target
+                .CreateSolidColorBrush(&d2d_color(accent.r, accent.g, accent.b, 0.25), None)?;
+            let aura_brush_2 = render_target
+                .CreateSolidColorBrush(&d2d_color(accent.r, accent.g, accent.b, 0.14), None)?;
+            let aura_brush_3 = render_target
+                .CreateSolidColorBrush(&d2d_color(accent.r, accent.g, accent.b, 0.07), None)?;
             // Ambient glow — soft luminance around every cell
-            let ambient_glow_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 1.0, 1.0, 0.06),
-                None,
-            )?;
-            let badge_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 0.75, 0.15, 0.90),
-                None,
-            )?;
-            let badge_text_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(0.0, 0.0, 0.0, 0.95),
-                None,
-            )?;
+            let ambient_glow_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(1.0, 1.0, 1.0, 0.06), None)?;
+            let badge_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(1.0, 0.75, 0.15, 0.90), None)?;
+            let badge_text_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(0.0, 0.0, 0.0, 0.95), None)?;
 
             // Quick list bar brushes
             // Background: slightly lighter than main backdrop
-            let quick_list_bg_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(0.04, 0.05, 0.09, 0.92),
-                None,
-            )?;
+            let quick_list_bg_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(0.04, 0.05, 0.09, 0.92), None)?;
             // 1-pixel separator line between grid area and quick list
-            let quick_list_separator_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 1.0, 1.0, 0.08),
-                None,
-            )?;
+            let quick_list_separator_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(1.0, 1.0, 1.0, 0.08), None)?;
             // Dim white for unselected entry text
-            let quick_list_text_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 1.0, 1.0, 0.65),
-                None,
-            )?;
+            let quick_list_text_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(1.0, 1.0, 1.0, 0.65), None)?;
             // Even dimmer for non-selected letter badges
-            let quick_list_dim_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 1.0, 1.0, 0.38),
-                None,
-            )?;
+            let quick_list_dim_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(1.0, 1.0, 1.0, 0.38), None)?;
             // Accent-colored pill for the selected entry
-            let quick_list_selected_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(accent.r, accent.g, accent.b, 0.22),
-                None,
-            )?;
+            let quick_list_selected_brush = render_target
+                .CreateSolidColorBrush(&d2d_color(accent.r, accent.g, accent.b, 0.22), None)?;
             // Bright white text for the selected entry
-            let quick_list_selected_text_brush = render_target.CreateSolidColorBrush(
-                &d2d_color(1.0, 1.0, 1.0, 0.95),
-                None,
-            )?;
+            let quick_list_selected_text_brush =
+                render_target.CreateSolidColorBrush(&d2d_color(1.0, 1.0, 1.0, 0.95), None)?;
 
             // Text formats — Segoe UI Variable for Windows 11 polish
             let font_name: Vec<u16> = "Segoe UI Variable\0".encode_utf16().collect();
@@ -334,8 +301,9 @@ impl OverlayRenderer {
                 presentOptions: windows::Win32::Graphics::Direct2D::D2D1_PRESENT_OPTIONS_NONE,
             };
 
-            self.render_target =
-                self.d2d_factory.CreateHwndRenderTarget(&rt_props, &hwnd_rt_props)?;
+            self.render_target = self
+                .d2d_factory
+                .CreateHwndRenderTarget(&rt_props, &hwnd_rt_props)?;
             self.render_target
                 .SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
 
@@ -357,7 +325,8 @@ impl OverlayRenderer {
             self.render_target.BeginDraw();
 
             // Clear to transparent
-            self.render_target.Clear(Some(&d2d_color(0.0, 0.0, 0.0, 0.0)));
+            self.render_target
+                .Clear(Some(&d2d_color(0.0, 0.0, 0.0, 0.0)));
 
             // Draw backdrop
             let full_rect = d2d_rect(0.0, 0.0, area_width, area_height);
@@ -398,7 +367,7 @@ impl OverlayRenderer {
                 let aura_layers: [(&ID2D1SolidColorBrush, f32); 3] = [
                     (&self.aura_brush_3, 24.0 * dpi), // outermost — faintest
                     (&self.aura_brush_2, 14.0 * dpi),
-                    (&self.aura_brush_1, 6.0 * dpi),  // innermost — brightest
+                    (&self.aura_brush_1, 6.0 * dpi), // innermost — brightest
                 ];
                 for (brush, expand) in &aura_layers {
                     let aura_rect = d2d_rect(
@@ -412,7 +381,8 @@ impl OverlayRenderer {
                         radiusX: corner_r + expand,
                         radiusY: corner_r + expand,
                     };
-                    self.render_target.FillRoundedRectangle(&aura_rounded, *brush);
+                    self.render_target
+                        .FillRoundedRectangle(&aura_rounded, *brush);
                 }
             } else {
                 // Ambient glow — subtle luminance halo around every cell
@@ -644,6 +614,185 @@ impl OverlayRenderer {
             let _ = self.render_target.Resize(&D2D_SIZE_U { width, height });
         }
     }
+
+    /// Render label mode: draw small letter labels above each window's title bar.
+    ///
+    /// `overlay_hwnd` is used to get the overlay window's position for coordinate conversion.
+    pub fn render_labels_only(
+        &self,
+        windows: &[WindowInfo],
+        selected: Option<usize>,
+        overlay_hwnd: HWND,
+    ) {
+        tracing::info!(
+            "render_labels_only: {} windows, selected={:?}",
+            windows.len(),
+            selected
+        );
+
+        // Get overlay window position (top-left corner in screen coordinates)
+        let overlay_offset = unsafe {
+            let mut overlay_rect = RECT::default();
+            if GetWindowRect(overlay_hwnd, &mut overlay_rect).is_ok() {
+                (overlay_rect.left, overlay_rect.top)
+            } else {
+                tracing::warn!("Failed to get overlay window rect, using (0, 0)");
+                (0, 0)
+            }
+        };
+
+        tracing::debug!(
+            "Overlay window offset: ({}, {})",
+            overlay_offset.0,
+            overlay_offset.1
+        );
+
+        unsafe {
+            self.render_target.BeginDraw();
+
+            // Clear to color-key color (RGB 1,1,1) for transparency via LWA_COLORKEY
+            // This is a very dark gray that will be made transparent by the layered window attribute
+            self.render_target
+                .Clear(Some(&d2d_color(1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0, 1.0)));
+
+            // Draw a label for each window
+            for (i, window) in windows.iter().enumerate() {
+                let is_selected = selected == Some(i);
+                tracing::debug!(
+                    "Drawing label for window {}: {:?}, letter={:?}, minimized={}, selected={}",
+                    i,
+                    window.hwnd,
+                    window.letter,
+                    window.is_minimized,
+                    is_selected
+                );
+                self.draw_label_for_window(window, is_selected, overlay_offset);
+            }
+
+            if let Err(e) = self.render_target.EndDraw(None, None) {
+                tracing::error!("Direct2D EndDraw failed in label mode: {:?}", e);
+            }
+        }
+    }
+
+    /// Draw a single label above a window's title bar.
+    ///
+    /// `overlay_offset` is the (left, top) position of the overlay window in screen coordinates.
+    fn draw_label_for_window(
+        &self,
+        window: &WindowInfo,
+        is_selected: bool,
+        overlay_offset: (i32, i32),
+    ) {
+        unsafe {
+            // Get window rectangle (absolute screen coordinates)
+            let mut window_rect = RECT::default();
+            if GetWindowRect(window.hwnd, &mut window_rect).is_err() {
+                tracing::warn!("Failed to get window rect for {:?}", window.hwnd);
+                return;
+            }
+
+            tracing::debug!(
+                "Window rect for {:?}: left={}, top={}, right={}, bottom={}",
+                window.hwnd,
+                window_rect.left,
+                window_rect.top,
+                window_rect.right,
+                window_rect.bottom
+            );
+
+            // Skip minimized windows (they don't have visible title bars)
+            if window.is_minimized {
+                tracing::debug!("Skipping minimized window {:?}", window.hwnd);
+                return;
+            }
+
+            // Calculate label position (in screen coordinates)
+            let (screen_x, screen_y) = calculate_label_position(&window_rect);
+
+            // Convert to overlay client coordinates
+            let label_x = screen_x - overlay_offset.0 as f32;
+            let label_y = screen_y - overlay_offset.1 as f32;
+
+            tracing::debug!(
+                "Label position for {:?}: screen=({}, {}), client=({}, {}), letter={:?}",
+                window.hwnd,
+                screen_x,
+                screen_y,
+                label_x,
+                label_y,
+                window.letter
+            );
+
+            // Label dimensions
+            let label_w = LABEL_MODE_WIDTH;
+            let label_h = LABEL_MODE_HEIGHT;
+            let corner_r = LABEL_MODE_CORNER_RADIUS;
+
+            // Draw glow effect for selected label (3 layers)
+            if is_selected {
+                let glow_layers: [(&ID2D1SolidColorBrush, f32); 3] = [
+                    (&self.aura_brush_3, 16.0), // outermost
+                    (&self.aura_brush_2, 10.0),
+                    (&self.aura_brush_1, 4.0), // innermost
+                ];
+                for (brush, expand) in &glow_layers {
+                    let glow_rect = d2d_rect(
+                        label_x - expand,
+                        label_y - expand,
+                        label_x + label_w + expand,
+                        label_y + label_h + expand,
+                    );
+                    let glow_rounded = D2D1_ROUNDED_RECT {
+                        rect: glow_rect,
+                        radiusX: corner_r + expand,
+                        radiusY: corner_r + expand,
+                    };
+                    self.render_target
+                        .FillRoundedRectangle(&glow_rounded, *brush);
+                }
+            }
+
+            // Draw label background
+            let label_rect = d2d_rect(label_x, label_y, label_x + label_w, label_y + label_h);
+            let rounded = D2D1_ROUNDED_RECT {
+                rect: label_rect,
+                radiusX: corner_r,
+                radiusY: corner_r,
+            };
+
+            let bg_brush = if is_selected {
+                &self.label_accent_brush
+            } else {
+                &self.label_semi_brush
+            };
+            self.render_target.FillRoundedRectangle(&rounded, bg_brush);
+
+            // Draw letter text
+            if let Some(letter) = window.letter {
+                let letter_str: Vec<u16> =
+                    letter.to_uppercase().to_string().encode_utf16().collect();
+                let text_brush = if is_selected {
+                    &self.badge_text_brush // Dark text on accent background
+                } else {
+                    &self.label_dark_text_brush // White text on frosted glass
+                };
+
+                tracing::debug!("Drawing letter '{}' for window {:?}", letter, window.hwnd);
+
+                self.render_target.DrawText(
+                    &letter_str,
+                    &self.label_format,
+                    &label_rect,
+                    text_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
+                );
+            } else {
+                tracing::warn!("Window {:?} has no letter assigned!", window.hwnd);
+            }
+        }
+    }
 }
 
 fn d2d_color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
@@ -656,5 +805,30 @@ fn d2d_rect(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
         top,
         right,
         bottom,
+    }
+}
+
+/// Calculate the position for a label inside a window (top-left corner area).
+/// Returns (x, y) coordinates for the top-left corner of the label.
+///
+/// The label is positioned inside the window to avoid going off-screen,
+/// especially for maximized or full-screen windows.
+fn calculate_label_position(window_rect: &RECT) -> (f32, f32) {
+    unsafe {
+        // Get system metrics for window border width
+        let border_width = GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+        let title_bar_height =
+            GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CYCAPTION);
+
+        // Position label in the top-left corner, inside the window
+        // Add some padding from the edge
+        let padding = 12.0;
+        let label_x = window_rect.left as f32 + border_width as f32 + padding;
+
+        // Position below the title bar, inside the client area
+        let label_y =
+            window_rect.top as f32 + border_width as f32 + title_bar_height as f32 + padding;
+
+        (label_x, label_y)
     }
 }
