@@ -20,6 +20,7 @@ mod settings_dialog;
 mod state;
 mod tray;
 mod window_enumerator;
+mod window_icon;
 mod window_info;
 mod window_switcher;
 
@@ -44,6 +45,8 @@ use windows::Win32::Graphics::Gdi::{
     PAINTSTRUCT, PS_NULL, TRANSPARENT,
     DrawTextW, DT_CENTER, DT_SINGLELINE, DT_VCENTER,
 };
+use windows::Win32::UI::WindowsAndMessaging::DrawIconEx;
+use windows::Win32::UI::WindowsAndMessaging::DI_NORMAL;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -471,6 +474,29 @@ unsafe extern "system" fn overlay_wndproc(
                             &mut wtext,
                             &mut letter_rect,
                             DT_CENTER | DT_SINGLELINE | DT_VCENTER,
+                        );
+                    }
+
+                    // Application icon — top-left of the thumbnail, 32×32 px.
+                    // We fetch the icon on every paint to keep code simple
+                    // (no caching needed; SendMessage is fast for live windows).
+                    let icon_size: i32 = 32;
+                    let icon_margin: i32 = 8;
+                    let icon_x = tb.x as i32 + icon_margin;
+                    let icon_y = tb.y as i32 + icon_margin;
+                    if let Some(hicon) = window_icon::get_window_icon(win.hwnd) {
+                        // DrawIconEx renders an HICON into a GDI HDC at any size.
+                        // DI_NORMAL = draw the icon with its mask (transparency respected).
+                        let _ = DrawIconEx(
+                            hdc,
+                            icon_x,
+                            icon_y,
+                            hicon,
+                            icon_size,
+                            icon_size,
+                            0,
+                            None,
+                            DI_NORMAL,
                         );
                     }
 
