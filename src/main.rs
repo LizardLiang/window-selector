@@ -37,8 +37,9 @@ use tray::{
 use window_enumerator::{register_overlay_hwnds, snapshot_windows};
 use window_switcher::{restore_focus, switch_to_window};
 
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, EndPaint, FillRect,
     RoundRect, SelectObject, SetBkMode, SetTextColor,
@@ -100,6 +101,37 @@ fn set_app_state(ptr: *mut AppState) {
 }
 
 fn main() {
+    // --- Single-instance guard ---
+    // A named mutex ensures only one copy of the app runs at a time.
+    // CreateMutexW creates-or-opens the mutex.  If another process already
+    // owns it, GetLastError returns ERROR_ALREADY_EXISTS and we exit cleanly.
+    // The mutex handle is kept alive in `_mutex` for the entire duration of
+    // main(); Windows releases it automatically when the process exits.
+    let _mutex = unsafe {
+        match CreateMutexW(
+            None,  // default security
+            true,  // this process claims ownership immediately
+            w!("Global\\window-selector-single-instance"),
+        ) {
+            Ok(handle) => {
+                // CreateMutexW succeeded.  Check whether we opened an existing
+                // mutex (another instance is already running).
+                if windows::Win32::Foundation::GetLastError() == ERROR_ALREADY_EXISTS {
+                    // Another instance is already running — exit silently.
+                    // `handle` is dropped here, which closes it.
+                    return;
+                }
+                handle
+            }
+            Err(_) => {
+                // Mutex creation failed entirely (e.g., access denied).
+                // Proceed anyway — single-instance guard is best-effort.
+                // Logging is not yet initialized, so we cannot log here.
+                windows::Win32::Foundation::HANDLE::default()
+            }
+        }
+    };
+
     // Check for --debug flag: allocate a console window so logs are visible in real-time.
     let debug_mode = std::env::args().any(|a| a == "--debug");
     if debug_mode {
@@ -478,13 +510,13 @@ unsafe extern "system" fn overlay_wndproc(
                     }
 
                     // Application icon — top-left of the thumbnail, 32×32 px.
-                    // We fetch the icon on every paint to keep code simple
-                    // (no caching needed; SendMessage is fast for live windows).
+                    // The icon was fetched once at snapshot time and cached in win.icon,
+                    // so no IPC call is needed here on every repaint.
                     let icon_size: i32 = 32;
                     let icon_margin: i32 = 8;
                     let icon_x = tb.x as i32 + icon_margin;
                     let icon_y = tb.y as i32 + icon_margin;
-                    if let Some(hicon) = window_icon::get_window_icon(win.hwnd) {
+                    if let Some(hicon) = win.icon {
                         // DrawIconEx renders an HICON into a GDI HDC at any size.
                         // DI_NORMAL = draw the icon with its mask (transparency respected).
                         let _ = DrawIconEx(

@@ -17,7 +17,8 @@
 /// Returns `None` if no icon is available (caller should skip drawing).
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassLongPtrW, SendMessageW, GCLP_HICON, GCLP_HICONSM, HICON, WM_GETICON,
+    GetClassLongPtrW, SendMessageTimeoutW, GCLP_HICON, GCLP_HICONSM, HICON,
+    SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_GETICON,
 };
 
 // WM_GETICON wParam constants from WinUser.h.
@@ -71,15 +72,24 @@ pub fn get_window_icon(hwnd: HWND) -> Option<HICON> {
 
 /// Send WM_GETICON to the window and return the icon handle if non-null.
 ///
-/// `SendMessageW` dispatches synchronously; the target window processes the
-/// message immediately on its own thread via its wndproc.  This is safe and
-/// standard for WM_GETICON.
+/// Uses `SendMessageTimeoutW` with `SMTO_ABORTIFHUNG` to avoid blocking
+/// indefinitely if the target window is not responding.  The 50 ms timeout
+/// is generous for WM_GETICON (a trivial message) but short enough to keep
+/// the overlay responsive even when a target window is hung.
 unsafe fn send_get_icon(hwnd: HWND, icon_type: usize) -> Option<HICON> {
-    // WM_GETICON returns the HICON value as the LRESULT (an isize).
-    let result = SendMessageW(hwnd, WM_GETICON, WPARAM(icon_type), LPARAM(0));
-    if result.0 != 0 {
-        // Cast the isize LRESULT to *mut c_void for HICON.
-        Some(HICON(result.0 as *mut core::ffi::c_void))
+    let mut result: usize = 0;
+    // SendMessageTimeoutW returns 0 on timeout / failure.
+    let ok = SendMessageTimeoutW(
+        hwnd,
+        WM_GETICON,
+        WPARAM(icon_type),
+        LPARAM(0),
+        SMTO_ABORTIFHUNG | SMTO_BLOCK,
+        50, // milliseconds
+        Some(&mut result),
+    );
+    if ok.0 != 0 && result != 0 {
+        Some(HICON(result as *mut core::ffi::c_void))
     } else {
         None
     }

@@ -137,9 +137,11 @@ pub fn snapshot_windows(
     // Assign letters
     crate::letter_assignment::assign_letters(&mut windows);
 
-    // Re-apply session tags
+    // Re-apply session tags and fetch each window's icon once.
+    // Caching here avoids sending WM_GETICON on every WM_PAINT repaint.
     for window in &mut windows {
         window.number_tag = session_tags.get_tag_for_hwnd(window.hwnd);
+        window.icon = crate::window_icon::get_window_icon(window.hwnd);
     }
 
     tracing::debug!(

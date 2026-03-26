@@ -1,4 +1,5 @@
 use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::WindowsAndMessaging::HICON;
 
 /// Snapshot of a single window at overlay activation time.
 #[derive(Debug, Clone)]
@@ -10,6 +11,10 @@ pub struct WindowInfo {
     pub monitor_index: usize,
     pub letter: Option<char>,
     pub number_tag: Option<u8>,
+    /// Cached icon handle fetched once at snapshot time.
+    /// Avoids sending WM_GETICON on every WM_PAINT repaint.
+    /// Do NOT call DestroyIcon on this — the handle is owned by the target process.
+    pub icon: Option<HICON>,
 }
 
 impl WindowInfo {
@@ -21,6 +26,7 @@ impl WindowInfo {
             monitor_index,
             letter: None,
             number_tag: None,
+            icon: None,
         }
     }
 }
