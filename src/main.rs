@@ -17,6 +17,9 @@ mod mru_tracker;
 mod overlay;
 mod overlay_renderer;
 mod settings_dialog;
+mod settings_panel;
+mod settings_renderer;
+mod startup;
 mod state;
 mod tray;
 mod window_enumerator;
@@ -64,16 +67,17 @@ const MSG_WINDOW_NAME: &str = "Window Selector\0";
 
 /// Application state owned by the single message pump thread.
 #[allow(dead_code)]
-struct AppState {
-    config: AppConfig,
-    config_dir: std::path::PathBuf,
-    overlay_state: OverlayState,
-    session_tags: SessionTags,
-    mru_tracker: MruTracker,
-    overlay_manager: OverlayManager,
-    previous_foreground: Option<HWND>,
-    window_snapshot: Vec<window_info::WindowInfo>,
-    msg_hwnd: HWND,
+pub(crate) struct AppState {
+    pub(crate) config: AppConfig,
+    pub(crate) config_dir: std::path::PathBuf,
+    pub(crate) overlay_state: OverlayState,
+    pub(crate) session_tags: SessionTags,
+    pub(crate) mru_tracker: MruTracker,
+    pub(crate) overlay_manager: OverlayManager,
+    pub(crate) previous_foreground: Option<HWND>,
+    pub(crate) window_snapshot: Vec<window_info::WindowInfo>,
+    pub(crate) msg_hwnd: HWND,
+    pub(crate) settings_panel: settings_panel::SettingsPanelManager,
 }
 
 /// Global pointer to `AppState`, stored as an atomic integer so the static is safe
@@ -89,6 +93,12 @@ static APP_STATE_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomic
 #[inline]
 fn get_app_state() -> *mut AppState {
     APP_STATE_PTR.load(std::sync::atomic::Ordering::Relaxed) as *mut AppState
+}
+
+/// Public version of `get_app_state` for use by settings_panel.rs.
+/// SAFETY: same invariant as `get_app_state` — only called from the message pump thread.
+pub(crate) fn get_app_state_pub() -> *mut AppState {
+    get_app_state()
 }
 
 /// Set (or clear) the `AppState` pointer. Must only be called from the message pump
@@ -250,12 +260,16 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
         previous_foreground: None,
         window_snapshot: Vec::new(),
         msg_hwnd,
+        settings_panel: settings_panel::SettingsPanelManager::new(),
     });
 
     // Set global pointer — valid for the lifetime of the message loop.
     let app_state_ptr = app_state.as_mut() as *mut AppState;
     set_app_state(app_state_ptr);
     SetWindowLongPtrW(msg_hwnd, GWLP_USERDATA, app_state_ptr as isize);
+
+    // Sync launch_at_startup from registry on startup so the toggle shows the correct state.
+    (*app_state_ptr).config.launch_at_startup = startup::get_launch_at_startup();
 
     // Install MRU tracker.
     mru_tracker::set_global_mru_tracker(&mut (*app_state_ptr).mru_tracker as *mut MruTracker);
@@ -372,6 +386,10 @@ unsafe extern "system" fn main_wndproc(
         }
 
         WM_HOTKEY => {
+            // Guard: if settings panel is open, ignore overlay hotkeys (UI-6).
+            if app.settings_panel.is_open() {
+                return LRESULT(0);
+            }
             let hotkey_id = wparam.0 as i32;
             if hotkey_id == hotkey::HOTKEY_ID {
                 handle_hotkey(app);
@@ -691,7 +709,18 @@ unsafe fn activate_overlay(app: &mut AppState) {
     tracing::info!("Activating overlay: {} windows", app.window_snapshot.len());
 
     let snap = app.window_snapshot.clone();
-    app.overlay_manager.show(&snap, &mut app.overlay_state);
+    let render_config = overlay_renderer::RenderConfig {
+        label_font_size: app.config.label_font_size,
+        title_font_size: app.config.title_font_size,
+        background_opacity: app.config.background_opacity,
+    };
+    app.overlay_manager.show(
+        &snap,
+        &mut app.overlay_state,
+        app.config.overlay_opacity,
+        app.config.grid_padding,
+        render_config,
+    );
 
     // Activate the keyboard hook so key presses reach the overlay regardless
     // of whether SetForegroundWindow succeeded.
@@ -748,8 +777,13 @@ unsafe fn activate_label_mode(app: &mut AppState) {
 
     // Show overlay in label mode (transparent background with labels only)
     let snap = app.window_snapshot.clone();
+    let render_config = overlay_renderer::RenderConfig {
+        label_font_size: app.config.label_font_size,
+        title_font_size: app.config.title_font_size,
+        background_opacity: app.config.background_opacity,
+    };
     app.overlay_manager
-        .show_label_mode(&snap, &mut app.overlay_state);
+        .show_label_mode(&snap, &mut app.overlay_state, render_config);
 
     // Activate the keyboard hook
     keyboard_hook::set_active(true);
@@ -783,7 +817,7 @@ unsafe fn handle_menu_command(app: &mut AppState, hwnd: HWND, cmd: u32) {
             }
         }
         MENU_SETTINGS => {
-            settings_dialog::SettingsDialog::show(hwnd, &app.config);
+            app.settings_panel.open(hwnd);
         }
         MENU_ABOUT => {
             about_dialog::show_about(hwnd);
