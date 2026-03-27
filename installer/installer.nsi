@@ -48,7 +48,7 @@
 ; 3. Global attributes
 ; ---------------------------------------------------------------------------
 Name "Window Selector"
-OutFile "..\target\x86_64-pc-windows-msvc\release\WindowSelector-${VERSION}-setup.exe"
+OutFile "..\target\x86_64-pc-windows-gnu\release\WindowSelector-${VERSION}-setup.exe"
 InstallDir "$LOCALAPPDATA\window-selector"
 InstallDirRegKey HKCU "${UNINST_REG_KEY}" "InstallLocation"
 RequestExecutionLevel user
@@ -260,7 +260,7 @@ Section "Install"
   SetOutPath "$INSTDIR"
 
   ; Install application binary and icon.
-  File "..\target\x86_64-pc-windows-msvc\release\window-selector.exe"
+  File "..\target\x86_64-pc-windows-gnu\release\window-selector.exe"
   File "..\resources\app.ico"
 
   ; Create uninstaller stub in the install directory.
