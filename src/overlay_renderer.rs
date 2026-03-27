@@ -124,11 +124,6 @@ pub struct OverlayRenderer {
 }
 
 impl OverlayRenderer {
-    /// Initialize Direct2D and DirectWrite for the given HWND with default config.
-    pub fn new(hwnd: HWND, dpi_scale: f32, accent: AccentColor) -> windows::core::Result<Self> {
-        Self::new_with_config(hwnd, dpi_scale, accent, RenderConfig::default())
-    }
-
     /// Initialize Direct2D and DirectWrite for the given HWND with config-driven parameters.
     /// Font sizes come from `config`; background_opacity is stored and applied per-frame.
     pub fn new_with_config(

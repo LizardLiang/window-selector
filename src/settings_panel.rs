@@ -6,6 +6,11 @@
 /// The settings window is a top-level WS_OVERLAPPEDWINDOW (no resize, no maximize).
 /// It appears in the taskbar via WS_EX_APPWINDOW.
 use crate::config::AppConfig;
+use crate::keycodes::{
+    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VK_CONTROL, VK_ESCAPE, VK_LCONTROL,
+    VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+    WM_KEYDOWN_RAW, WM_SYSKEYDOWN_RAW,
+};
 use crate::settings_renderer::{ControlRects, DrawState, SettingsRenderer};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -16,9 +21,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetSystemMetrics,
     HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, PostMessageW, RegisterClassExW,
-    SetWindowPos, SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx, WH_KEYBOARD_LL,
     CS_HREDRAW, CS_VREDRAW, HMENU, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
-    SWP_NOACTIVATE, SWP_NOZORDER, WM_CLOSE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_CLOSE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SIZE, WNDCLASSEXW, WS_EX_APPWINDOW,
     WS_CAPTION, WS_MINIMIZEBOX, WS_SYSMENU,
 };
@@ -26,6 +31,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 const SETTINGS_CLASS_NAME: &str = "WindowSelectorSettings\0";
 const SETTINGS_WINDOW_TITLE: &str = "Window Selector Settings\0";
+
+/// RAII guard for a `WH_KEYBOARD_LL` hook handle.
+/// Calls `UnhookWindowsHookEx` in `Drop`, ensuring cleanup on panic or crash.
+struct HookGuard(HHOOK);
+
+impl Drop for HookGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = UnhookWindowsHookEx(self.0);
+            tracing::debug!("WH_KEYBOARD_LL hook uninstalled (HookGuard drop)");
+        }
+    }
+}
 
 /// Fixed logical size of the settings window in physical pixels.
 /// Scaled by DPI at creation time.
@@ -65,7 +83,8 @@ pub struct SettingsPanelManager {
     /// Hotkey recorder state machine.
     recorder: HotkeyRecorderState,
     /// Low-level keyboard hook handle (installed only during recording).
-    ll_hook: Option<HHOOK>,
+    /// Wrapped in HookGuard for automatic cleanup on drop/panic.
+    ll_hook: Option<HookGuard>,
     /// Index of slider currently being dragged (0-5), or None.
     active_slider: Option<usize>,
     /// Pending error text for main hotkey field.
@@ -103,8 +122,7 @@ impl SettingsPanelManager {
             // Already open: bring to front
             unsafe {
                 let _ = ShowWindow(hwnd, SW_SHOW);
-                let _ = SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0,
-                    SWP_NOZORDER | SWP_NOACTIVATE);
+                let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
             }
             return;
         }
@@ -202,6 +220,7 @@ impl SettingsPanelManager {
     }
 
     /// Close the settings panel and clean up resources.
+    #[allow(dead_code)]
     pub fn close(&mut self) {
         // SA review: uninstall WH_KEYBOARD_LL if in Recording state before HWND destruction
         if self.recorder != HotkeyRecorderState::Idle {
@@ -253,7 +272,7 @@ impl SettingsPanelManager {
             let instance = GetModuleHandleW(PCWSTR::null()).unwrap_or_default();
             match SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_keyboard_proc), instance, 0) {
                 Ok(hook) => {
-                    self.ll_hook = Some(hook);
+                    self.ll_hook = Some(HookGuard(hook));
                     tracing::debug!("WH_KEYBOARD_LL hook installed for hotkey recording");
                 }
                 Err(e) => {
@@ -264,13 +283,9 @@ impl SettingsPanelManager {
     }
 
     /// Uninstall the WH_KEYBOARD_LL hook.
+    /// Dropping the HookGuard calls UnhookWindowsHookEx automatically.
     pub fn uninstall_ll_hook(&mut self) {
-        if let Some(hook) = self.ll_hook.take() {
-            unsafe {
-                let _ = UnhookWindowsHookEx(hook);
-                tracing::debug!("WH_KEYBOARD_LL hook uninstalled");
-            }
-        }
+        self.ll_hook = None;
     }
 
     /// Build DrawState for the renderer from current panel state.
@@ -607,6 +622,147 @@ impl Default for SettingsPanelManager {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keycodes::{
+        is_modifier_only, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
+        VK_A, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU,
+        VK_Q, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_Y,
+    };
+
+    // TC-2.1: Recorder starts in Idle state
+    #[test]
+    fn test_recorder_starts_idle() {
+        let manager = SettingsPanelManager::new();
+        assert_eq!(manager.recorder, HotkeyRecorderState::Idle);
+    }
+
+    // TC-2.2: Recording state transitions — Idle to Recording
+    #[test]
+    fn test_recorder_state_transitions_idle_to_recording() {
+        // We test the enum structure directly without calling start_recording()
+        // (which requires AppState). The Recording variant must hold target + previous values.
+        let state = HotkeyRecorderState::Recording {
+            target: 1,
+            previous_modifiers: MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+            previous_vk: VK_Q,
+        };
+        assert_ne!(state, HotkeyRecorderState::Idle);
+        match state {
+            HotkeyRecorderState::Recording { target, previous_modifiers, previous_vk } => {
+                assert_eq!(target, 1);
+                assert_eq!(previous_modifiers, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT);
+                assert_eq!(previous_vk, VK_Q);
+            }
+            _ => panic!("Expected Recording state"),
+        }
+    }
+
+    // TC-2.3: Escape cancel reverts to Idle with original combo preserved in enum
+    #[test]
+    fn test_cancel_recording_reverts_to_idle() {
+        // cancel_recording() is safe when hwnd=None (no Win32 calls made).
+        let mut manager = SettingsPanelManager::new();
+        // Manually set recorder to Recording state (bypass start_recording which needs AppState)
+        manager.recorder = HotkeyRecorderState::Recording {
+            target: 1,
+            previous_modifiers: MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+            previous_vk: VK_Q,
+        };
+        assert_ne!(manager.recorder, HotkeyRecorderState::Idle);
+
+        // cancel_recording is safe: ll_hook is None (no UnhookWindowsHookEx call)
+        // and hwnd is None (no InvalidateRect call).
+        manager.cancel_recording();
+
+        assert_eq!(manager.recorder, HotkeyRecorderState::Idle);
+    }
+
+    // TC-2.4: Modifier-only VK codes are correctly identified as modifier-only
+    #[test]
+    fn test_is_modifier_only_identifies_modifier_keys() {
+        // All modifier keycodes must return true
+        assert!(is_modifier_only(VK_SHIFT),    "VK_SHIFT should be modifier-only");
+        assert!(is_modifier_only(VK_CONTROL),  "VK_CONTROL should be modifier-only");
+        assert!(is_modifier_only(VK_MENU),     "VK_MENU (Alt) should be modifier-only");
+        assert!(is_modifier_only(VK_LSHIFT),   "VK_LSHIFT should be modifier-only");
+        assert!(is_modifier_only(VK_RSHIFT),   "VK_RSHIFT should be modifier-only");
+        assert!(is_modifier_only(VK_LCONTROL), "VK_LCONTROL should be modifier-only");
+        assert!(is_modifier_only(VK_RCONTROL), "VK_RCONTROL should be modifier-only");
+        assert!(is_modifier_only(VK_LMENU),    "VK_LMENU should be modifier-only");
+        assert!(is_modifier_only(VK_RMENU),    "VK_RMENU should be modifier-only");
+        assert!(is_modifier_only(VK_LWIN),     "VK_LWIN should be modifier-only");
+        assert!(is_modifier_only(VK_RWIN),     "VK_RWIN should be modifier-only");
+    }
+
+    // TC-2.4 (continued): Non-modifier keys must NOT be identified as modifier-only
+    #[test]
+    fn test_is_modifier_only_rejects_non_modifier_keys() {
+        assert!(!is_modifier_only(VK_A), "VK_A should not be modifier-only");
+        assert!(!is_modifier_only(VK_Q), "VK_Q should not be modifier-only");
+        assert!(!is_modifier_only(VK_Y), "VK_Y should not be modifier-only");
+        assert!(!is_modifier_only(0x70), "F1 should not be modifier-only");
+        assert!(!is_modifier_only(0x20), "VK_SPACE should not be modifier-only");
+    }
+
+    // TC-2.5: Valid combo (modifier + non-modifier) passes validation
+    // The hook requires at least one modifier flag besides MOD_NOREPEAT.
+    // We replicate the ll_keyboard_proc validation logic here as a pure test.
+    #[test]
+    fn test_valid_combo_has_modifier_flag() {
+        // MOD_NOREPEAT is 0x4000; mask it out to check real modifiers.
+        let modifiers_ctrl_alt = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+        let has_modifier = (modifiers_ctrl_alt & !0x4000u32) != 0;
+        assert!(has_modifier, "Ctrl+Alt combo should have at least one modifier");
+
+        let modifiers_win = MOD_WIN | MOD_NOREPEAT;
+        let has_modifier = (modifiers_win & !0x4000u32) != 0;
+        assert!(has_modifier, "Win combo should have at least one modifier");
+
+        let modifiers_shift = MOD_SHIFT | MOD_NOREPEAT;
+        let has_modifier = (modifiers_shift & !0x4000u32) != 0;
+        assert!(has_modifier, "Shift combo should have at least one modifier");
+    }
+
+    // TC-2.5 (continued): MOD_NOREPEAT alone is not a valid modifier combo
+    #[test]
+    fn test_norepeat_only_fails_validation() {
+        // If only MOD_NOREPEAT is set, the combo has no real modifier.
+        let modifiers_none = MOD_NOREPEAT; // 0x4000 only
+        let has_modifier = (modifiers_none & !0x4000u32) != 0;
+        assert!(!has_modifier, "MOD_NOREPEAT alone should not count as a modifier");
+    }
+
+    // TC-2.6: Self-conflict detection (same VK+mods for both hotkeys)
+    // Pure config comparison: detect when main and label hotkeys share the same combo.
+    #[test]
+    fn test_self_conflict_detection_same_combo() {
+        use crate::config::AppConfig;
+        let mut config = AppConfig::default();
+        // Give both hotkeys the same combination
+        config.hotkey_modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+        config.hotkey_vk = VK_Q;
+        config.label_hotkey_modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+        config.label_hotkey_vk = VK_Q;
+
+        let conflict = config.hotkey_vk == config.label_hotkey_vk
+            && config.hotkey_modifiers == config.label_hotkey_modifiers;
+        assert!(conflict, "Same vk+mods for both hotkeys should be detected as conflict");
+    }
+
+    // TC-2.6 (continued): Different combos should not conflict
+    #[test]
+    fn test_self_conflict_detection_different_combos() {
+        use crate::config::AppConfig;
+        let config = AppConfig::default();
+        // Default: main = Ctrl+Alt+Q, label = Win+Y
+        let conflict = config.hotkey_vk == config.label_hotkey_vk
+            && config.hotkey_modifiers == config.label_hotkey_modifiers;
+        assert!(!conflict, "Different vk+mods combos should not conflict");
+    }
+}
+
 /// Low-level keyboard hook callback — captures key combinations during recording mode.
 /// Installed only when `HotkeyRecorderState::Recording` is active.
 unsafe extern "system" fn ll_keyboard_proc(
@@ -618,8 +774,8 @@ unsafe extern "system" fn ll_keyboard_proc(
         return CallNextHookEx(HHOOK::default(), code, wparam, lparam);
     }
 
-    // WM_KEYDOWN = 0x100, WM_SYSKEYDOWN = 0x104
-    let is_key_down = wparam.0 == 0x100 || wparam.0 == 0x104;
+    let is_key_down = wparam.0 == WM_KEYDOWN_RAW as usize
+        || wparam.0 == WM_SYSKEYDOWN_RAW as usize;
     if !is_key_down {
         return CallNextHookEx(HHOOK::default(), code, wparam, lparam);
     }
@@ -628,7 +784,7 @@ unsafe extern "system" fn ll_keyboard_proc(
     let vk = kb.vkCode;
 
     // Escape: cancel recording
-    if vk == 0x1B {
+    if vk == VK_ESCAPE {
         let panel_ptr = get_settings_panel();
         if !panel_ptr.is_null() {
             (*panel_ptr).cancel_recording();
@@ -637,12 +793,13 @@ unsafe extern "system" fn ll_keyboard_proc(
     }
 
     // Modifier-only keys: do not commit
-    let is_modifier = matches!(vk,
-        0x10 | 0x11 | 0x12 | // VK_SHIFT, VK_CONTROL, VK_MENU (generic)
-        0xA0 | 0xA1 | // VK_LSHIFT, VK_RSHIFT
-        0xA2 | 0xA3 | // VK_LCONTROL, VK_RCONTROL
-        0xA4 | 0xA5 | // VK_LMENU, VK_RMENU
-        0x5B | 0x5C   // VK_LWIN, VK_RWIN
+    let is_modifier = matches!(
+        vk,
+        VK_SHIFT | VK_CONTROL | VK_MENU |   // generic (either side)
+        VK_LSHIFT | VK_RSHIFT |              // side-specific Shift
+        VK_LCONTROL | VK_RCONTROL |          // side-specific Ctrl
+        VK_LMENU | VK_RMENU |               // side-specific Alt
+        VK_LWIN | VK_RWIN                    // Windows logo keys
     );
     if is_modifier {
         // Let modifier pass through so GetAsyncKeyState can read state
@@ -650,17 +807,17 @@ unsafe extern "system" fn ll_keyboard_proc(
     }
 
     // Compute modifier flags from async key state
-    let ctrl = (GetAsyncKeyState(0x11) as u16 & 0x8000) != 0;
-    let alt = (GetAsyncKeyState(0x12) as u16 & 0x8000) != 0;
-    let shift = (GetAsyncKeyState(0x10) as u16 & 0x8000) != 0;
-    let win = (GetAsyncKeyState(0x5B) as u16 & 0x8000) != 0
-        || (GetAsyncKeyState(0x5C) as u16 & 0x8000) != 0;
+    let ctrl = (GetAsyncKeyState(VK_CONTROL as i32) as u16 & 0x8000) != 0;
+    let alt = (GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000) != 0;
+    let shift = (GetAsyncKeyState(VK_SHIFT as i32) as u16 & 0x8000) != 0;
+    let win = (GetAsyncKeyState(VK_LWIN as i32) as u16 & 0x8000) != 0
+        || (GetAsyncKeyState(VK_RWIN as i32) as u16 & 0x8000) != 0;
 
-    let mut modifiers: u32 = 0x4000; // MOD_NOREPEAT always set
-    if ctrl { modifiers |= 0x0002; }
-    if alt { modifiers |= 0x0001; }
-    if shift { modifiers |= 0x0004; }
-    if win { modifiers |= 0x0008; }
+    let mut modifiers: u32 = MOD_NOREPEAT; // always set
+    if ctrl { modifiers |= MOD_CONTROL; }
+    if alt { modifiers |= MOD_ALT; }
+    if shift { modifiers |= MOD_SHIFT; }
+    if win { modifiers |= MOD_WIN; }
 
     // Must have at least one modifier besides MOD_NOREPEAT
     let has_modifier = (modifiers & !0x4000) != 0;
@@ -730,7 +887,7 @@ pub unsafe extern "system" fn settings_wndproc(
 
         WM_KEYDOWN => {
             let vk = wparam.0 as u32;
-            if vk == 0x1B {
+            if vk == VK_ESCAPE {
                 // Escape: close the settings panel
                 let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
             }

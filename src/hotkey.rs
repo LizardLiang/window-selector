@@ -1,3 +1,7 @@
+use crate::keycodes::{
+    MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, VK_A, VK_BACK, VK_ESCAPE, VK_F1, VK_F12, VK_RETURN,
+    VK_SPACE, VK_TAB, VK_Z,
+};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS,
@@ -65,17 +69,16 @@ pub fn unregister_label_hotkey(msg_hwnd: HWND) {
 pub fn format_hotkey(modifiers: u32, vk_code: u32) -> String {
     let mut parts = Vec::new();
 
-    // MOD_CONTROL = 0x0002, MOD_ALT = 0x0001, MOD_SHIFT = 0x0004, MOD_WIN = 0x0008
-    if (modifiers & 0x0002) != 0 {
+    if (modifiers & MOD_CONTROL) != 0 {
         parts.push("Ctrl");
     }
-    if (modifiers & 0x0001) != 0 {
+    if (modifiers & MOD_ALT) != 0 {
         parts.push("Alt");
     }
-    if (modifiers & 0x0004) != 0 {
+    if (modifiers & MOD_SHIFT) != 0 {
         parts.push("Shift");
     }
-    if (modifiers & 0x0008) != 0 {
+    if (modifiers & MOD_WIN) != 0 {
         parts.push("Win");
     }
 
@@ -87,17 +90,17 @@ pub fn format_hotkey(modifiers: u32, vk_code: u32) -> String {
 /// Map common virtual key codes to display names.
 fn vk_to_name(vk: u32) -> String {
     match vk {
-        0x20 => "Space".to_string(),
-        0x0D => "Enter".to_string(),
-        0x08 => "Backspace".to_string(),
-        0x09 => "Tab".to_string(),
-        0x1B => "Esc".to_string(),
-        0x70..=0x7B => format!("F{}", vk - 0x70 + 1),
-        0x41..=0x5A => {
-            let c = (b'A' + (vk - 0x41) as u8) as char;
+        VK_SPACE => "Space".to_string(),
+        VK_RETURN => "Enter".to_string(),
+        VK_BACK => "Backspace".to_string(),
+        VK_TAB => "Tab".to_string(),
+        VK_ESCAPE => "Esc".to_string(),
+        VK_F1..=VK_F12 => format!("F{}", vk - VK_F1 + 1),
+        VK_A..=VK_Z => {
+            let c = (b'A' + (vk - VK_A) as u8) as char;
             c.to_string()
         }
-        0x30..=0x39 => {
+        _ if (0x30..=0x39).contains(&vk) => {
             let c = (b'0' + (vk - 0x30) as u8) as char;
             c.to_string()
         }

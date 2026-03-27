@@ -39,7 +39,7 @@ impl FadeAnimator {
     /// immediately sets `current_alpha = alpha_max` with no intermediate ticks.
     pub fn new_with_params(alpha_max: u8, fade_duration_ms: u32) -> Self {
         let instant = fade_duration_ms == 0;
-        let alpha_delta = if instant || fade_duration_ms == 0 {
+        let alpha_delta = if instant {
             255 // not used in instant mode, but safe sentinel
         } else {
             let ticks = fade_duration_ms as f32 / FADE_TIMER_INTERVAL_MS as f32;

@@ -1,18 +1,19 @@
+use crate::keycodes::{MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_WIN, VK_Q, VK_Y};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 fn default_hotkey_modifiers() -> u32 {
-    0x0002 | 0x0001 | 0x4000
+    MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
 }
 fn default_hotkey_vk() -> u32 {
-    0x51
+    VK_Q
 }
 fn default_label_hotkey_modifiers() -> u32 {
-    0x0008 | 0x4000
+    MOD_WIN | MOD_NOREPEAT
 }
 fn default_label_hotkey_vk() -> u32 {
-    0x59
+    VK_Y
 }
 fn default_overlay_opacity() -> u8 {
     220
@@ -180,6 +181,7 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keycodes::{MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VK_F1, VK_Q, VK_Y};
     use std::fs;
 
     fn temp_dir() -> PathBuf {
@@ -197,10 +199,10 @@ mod tests {
     fn test_default_config_load_on_missing_file() {
         let dir = temp_dir();
         let config = AppConfig::load(&dir).expect("load should succeed");
-        assert_eq!(config.hotkey_modifiers, 0x0002 | 0x0001 | 0x4000);
-        assert_eq!(config.hotkey_vk, 0x51); // VK_Q
-        assert_eq!(config.label_hotkey_modifiers, 0x0008 | 0x4000);
-        assert_eq!(config.label_hotkey_vk, 0x59); // VK_Y
+        assert_eq!(config.hotkey_modifiers, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT);
+        assert_eq!(config.hotkey_vk, VK_Q);
+        assert_eq!(config.label_hotkey_modifiers, MOD_WIN | MOD_NOREPEAT);
+        assert_eq!(config.label_hotkey_vk, VK_Y);
         // Cleanup
         let _ = fs::remove_dir_all(&dir);
     }
@@ -209,11 +211,11 @@ mod tests {
     fn test_config_round_trip_save_and_load() {
         let dir = temp_dir();
         let original = AppConfig {
-            hotkey_modifiers: 0x0004, // MOD_SHIFT
-            hotkey_vk: 0x70,          // VK_F1
+            hotkey_modifiers: MOD_SHIFT,
+            hotkey_vk: VK_F1,
             direct_switch: true,
-            label_hotkey_modifiers: 0x0008 | 0x4000,
-            label_hotkey_vk: 0x59,
+            label_hotkey_modifiers: MOD_WIN | MOD_NOREPEAT,
+            label_hotkey_vk: VK_Y,
             launch_at_startup: false,
             overlay_opacity: 200,
             fade_duration_ms: 100,
@@ -244,7 +246,7 @@ mod tests {
         let config_path = dir.join("config.toml");
         fs::write(&config_path, b"not valid toml {{{{").expect("write corrupt");
         let config = AppConfig::load(&dir).expect("should return defaults, not error");
-        assert_eq!(config.hotkey_vk, 0x51); // Default VK_Q
+        assert_eq!(config.hotkey_vk, VK_Q); // default
         // Cleanup
         let _ = fs::remove_dir_all(&dir);
     }
@@ -301,6 +303,36 @@ mod tests {
         assert!((config.label_font_size - 32.0).abs() < 0.001);
         assert!((config.title_font_size - 8.0).abs() < 0.001);
         assert!((config.background_opacity - 1.0).abs() < 0.001);
+    }
+
+    // TC-4.11: AppConfig::validate() on a default config does not change any values.
+    // Ensures that all default values are already within their valid ranges.
+    #[test]
+    fn test_validate_does_not_change_default_values() {
+        let original = AppConfig::default();
+        let mut validated = AppConfig::default();
+        validated.validate();
+
+        assert_eq!(validated.overlay_opacity, original.overlay_opacity,
+            "validate() must not change default overlay_opacity");
+        assert_eq!(validated.fade_duration_ms, original.fade_duration_ms,
+            "validate() must not change default fade_duration_ms");
+        assert!((validated.grid_padding - original.grid_padding).abs() < 0.001,
+            "validate() must not change default grid_padding");
+        assert!((validated.label_font_size - original.label_font_size).abs() < 0.001,
+            "validate() must not change default label_font_size");
+        assert!((validated.title_font_size - original.title_font_size).abs() < 0.001,
+            "validate() must not change default title_font_size");
+        assert!((validated.background_opacity - original.background_opacity).abs() < 0.001,
+            "validate() must not change default background_opacity");
+        assert_eq!(validated.hotkey_modifiers, original.hotkey_modifiers,
+            "validate() must not change default hotkey_modifiers");
+        assert_eq!(validated.hotkey_vk, original.hotkey_vk,
+            "validate() must not change default hotkey_vk");
+        assert_eq!(validated.direct_switch, original.direct_switch,
+            "validate() must not change default direct_switch");
+        assert_eq!(validated.launch_at_startup, original.launch_at_startup,
+            "validate() must not change default launch_at_startup");
     }
 
     #[test]

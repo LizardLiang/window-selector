@@ -10,13 +10,13 @@ mod hotkey;
 mod icon;
 mod interaction;
 mod keyboard_hook;
+mod keycodes;
 mod letter_assignment;
 mod logging;
 mod monitor;
 mod mru_tracker;
 mod overlay;
 mod overlay_renderer;
-mod settings_dialog;
 mod settings_panel;
 mod settings_renderer;
 mod startup;
@@ -37,7 +37,7 @@ use tray::{
     add_tray_icon, remove_tray_icon, show_balloon, MENU_ABOUT, MENU_DIRECT_SWITCH, MENU_EXIT,
     MENU_SETTINGS, WM_TRAY_CALLBACK,
 };
-use window_enumerator::{register_overlay_hwnds, snapshot_windows};
+use window_enumerator::{filter_occluded_for_label_mode, register_overlay_hwnds, snapshot_windows};
 use window_switcher::{restore_focus, switch_to_window};
 
 use windows::core::{w, PCWSTR};
@@ -763,12 +763,16 @@ unsafe fn activate_label_mode(app: &mut AppState) {
     app.session_tags.release_closed();
 
     let mon_clone = app.overlay_manager.monitors.clone();
-    app.window_snapshot = snapshot_windows(
+    let raw_snapshot = snapshot_windows(
         app.overlay_manager.all_hwnds(),
         &mon_clone,
         &app.mru_tracker,
         &app.session_tags,
     );
+
+    // Filter out windows that are fully occluded by higher-Z-order windows.
+    // These would only add invisible labels that confuse the user.
+    app.window_snapshot = filter_occluded_for_label_mode(raw_snapshot);
 
     tracing::info!(
         "Activating label mode: {} windows",

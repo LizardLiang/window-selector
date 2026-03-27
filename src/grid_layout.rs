@@ -44,6 +44,7 @@ pub struct GridLayout {
 
 /// Default grid cell padding in logical pixels.
 /// Use `compute_grid_with_padding` to supply a config-driven value.
+#[cfg(test)]
 pub const DEFAULT_PADDING: f32 = 16.0;
 
 /// Aspect-ratio-driven grid layout algorithm.
@@ -53,6 +54,7 @@ pub const DEFAULT_PADDING: f32 = 16.0;
 /// Enforces a minimum cell size of 160x120 logical pixels.
 ///
 /// Uses `DEFAULT_PADDING` (16.0). Call `compute_grid_with_padding` for a configurable value.
+#[cfg(test)]
 pub fn compute_grid(window_count: usize, area_width: f32, area_height: f32) -> GridLayout {
     compute_grid_with_padding(window_count, area_width, area_height, DEFAULT_PADDING)
 }
@@ -274,6 +276,125 @@ mod tests {
                 i,
                 cell.y + cell.height,
                 TEST_HEIGHT
+            );
+        }
+    }
+
+    // TC-4.5: compute_grid_with_padding with padding=0.0 produces same cell count as compute_grid
+    #[test]
+    fn test_compute_grid_with_padding_zero_same_cell_count() {
+        // compute_grid uses DEFAULT_PADDING (16.0); padding=0.0 should still produce same cell count
+        // for normal window counts since more space is available per cell.
+        for n in [1, 4, 9, 16] {
+            let default_layout = compute_grid(n, TEST_WIDTH, TEST_HEIGHT);
+            let zero_pad_layout = compute_grid_with_padding(n, TEST_WIDTH, TEST_HEIGHT, 0.0);
+            assert_eq!(
+                default_layout.cells.len(),
+                zero_pad_layout.cells.len(),
+                "Cell count should match for n={} with padding=0.0 vs default",
+                n
+            );
+        }
+    }
+
+    // TC-4.5 (continued): zero padding produces cells that fill the full area exactly
+    #[test]
+    fn test_compute_grid_with_padding_zero_fills_area() {
+        let layout = compute_grid_with_padding(4, TEST_WIDTH, TEST_HEIGHT, 0.0);
+        assert_eq!(layout.cells.len(), 4);
+        // With 0 padding: cell_width = area_width / cols
+        let expected_cell_w = TEST_WIDTH / layout.cols as f32;
+        let expected_cell_h = TEST_HEIGHT / layout.rows as f32;
+        assert!(
+            (layout.cell_width - expected_cell_w).abs() < 0.01,
+            "With padding=0, cell_width {} should equal area/cols={}",
+            layout.cell_width,
+            expected_cell_w
+        );
+        assert!(
+            (layout.cell_height - expected_cell_h).abs() < 0.01,
+            "With padding=0, cell_height {} should equal area/rows={}",
+            layout.cell_height,
+            expected_cell_h
+        );
+    }
+
+    // TC-4.6: compute_grid_with_padding with custom padding produces smaller cells than default
+    #[test]
+    fn test_compute_grid_with_custom_padding_smaller_cells() {
+        let default_layout = compute_grid_with_padding(9, TEST_WIDTH, TEST_HEIGHT, DEFAULT_PADDING);
+        let large_pad_layout = compute_grid_with_padding(9, TEST_WIDTH, TEST_HEIGHT, 48.0);
+
+        // More padding means less space per cell
+        assert!(
+            large_pad_layout.cell_width <= default_layout.cell_width,
+            "Larger padding {} should produce cell_width {} <= default cell_width {}",
+            48.0,
+            large_pad_layout.cell_width,
+            default_layout.cell_width
+        );
+        assert!(
+            large_pad_layout.cell_height <= default_layout.cell_height,
+            "Larger padding {} should produce cell_height {} <= default cell_height {}",
+            48.0,
+            large_pad_layout.cell_height,
+            default_layout.cell_height
+        );
+    }
+
+    // TC-4.6 (continued): minimum padding 4.0 produces larger cells than default 16.0
+    #[test]
+    fn test_compute_grid_with_min_padding_larger_cells() {
+        let default_layout = compute_grid_with_padding(9, TEST_WIDTH, TEST_HEIGHT, DEFAULT_PADDING);
+        let min_pad_layout = compute_grid_with_padding(9, TEST_WIDTH, TEST_HEIGHT, 4.0);
+
+        // Less padding (4.0 < 16.0) means more space per cell
+        assert!(
+            min_pad_layout.cell_width >= default_layout.cell_width,
+            "Minimum padding 4.0 should produce cell_width {} >= default cell_width {}",
+            min_pad_layout.cell_width,
+            default_layout.cell_width
+        );
+    }
+
+    // TC-4.7: compute_grid_with_padding with large padding doesn't produce negative cell sizes
+    #[test]
+    fn test_compute_grid_with_large_padding_no_negative_cells() {
+        // Even with maximum allowed padding (48.0) on a standard screen, cells must be positive.
+        let layout = compute_grid_with_padding(16, TEST_WIDTH, TEST_HEIGHT, 48.0);
+        assert_eq!(layout.cells.len(), 16);
+        for (i, cell) in layout.cells.iter().enumerate() {
+            assert!(
+                cell.width > 0.0,
+                "Cell {} width {} must be positive with padding=48.0",
+                i,
+                cell.width
+            );
+            assert!(
+                cell.height > 0.0,
+                "Cell {} height {} must be positive with padding=48.0",
+                i,
+                cell.height
+            );
+        }
+    }
+
+    // TC-4.7 (continued): zero padding also produces strictly positive cell sizes
+    #[test]
+    fn test_compute_grid_with_zero_padding_positive_cells() {
+        let layout = compute_grid_with_padding(16, TEST_WIDTH, TEST_HEIGHT, 0.0);
+        for (i, cell) in layout.cells.iter().enumerate() {
+            assert!(
+                cell.width > 0.0,
+                "Cell {} width {} must be positive with padding=0.0",
+                i,
+                cell.width
+            );
+            assert!(
+                cell.height > 0.0,
+                "Cell {} height {} must be positive with padding=0.0",
+                i,
+                cell.height
             );
         }
     }
