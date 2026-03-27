@@ -42,12 +42,29 @@ pub struct GridLayout {
     pub cell_height: f32,
 }
 
+/// Default grid cell padding in logical pixels.
+/// Use `compute_grid_with_padding` to supply a config-driven value.
+pub const DEFAULT_PADDING: f32 = 16.0;
+
 /// Aspect-ratio-driven grid layout algorithm.
 ///
 /// Places `window_count` cells within an area of `area_width` x `area_height` logical pixels.
 /// Columns are computed to best match the monitor aspect ratio.
 /// Enforces a minimum cell size of 160x120 logical pixels.
+///
+/// Uses `DEFAULT_PADDING` (16.0). Call `compute_grid_with_padding` for a configurable value.
 pub fn compute_grid(window_count: usize, area_width: f32, area_height: f32) -> GridLayout {
+    compute_grid_with_padding(window_count, area_width, area_height, DEFAULT_PADDING)
+}
+
+/// Variant of `compute_grid` that accepts a configurable `padding` value.
+/// Driven from `AppConfig.grid_padding`.
+pub fn compute_grid_with_padding(
+    window_count: usize,
+    area_width: f32,
+    area_height: f32,
+    padding: f32,
+) -> GridLayout {
     if window_count == 0 {
         return GridLayout {
             cells: vec![],
@@ -58,7 +75,6 @@ pub fn compute_grid(window_count: usize, area_width: f32, area_height: f32) -> G
         };
     }
 
-    const PADDING: f32 = 16.0;
     const MIN_CELL_WIDTH: f32 = 160.0;
     const MIN_CELL_HEIGHT: f32 = 120.0;
 
@@ -75,21 +91,21 @@ pub fn compute_grid(window_count: usize, area_width: f32, area_height: f32) -> G
         target_cols,
         area_width,
         area_height,
-        PADDING,
+        padding,
         MIN_CELL_WIDTH,
         MIN_CELL_HEIGHT,
     );
     let rows = ((window_count as f32) / cols as f32).ceil() as usize;
 
-    let cell_width = (area_width - PADDING * (cols + 1) as f32) / cols as f32;
-    let cell_height = (area_height - PADDING * (rows + 1) as f32) / rows as f32;
+    let cell_width = (area_width - padding * (cols + 1) as f32) / cols as f32;
+    let cell_height = (area_height - padding * (rows + 1) as f32) / rows as f32;
 
     let cells = (0..window_count)
         .map(|i| {
             let row = i / cols;
             let col = i % cols;
-            let x = PADDING + col as f32 * (cell_width + PADDING);
-            let y = PADDING + row as f32 * (cell_height + PADDING);
+            let x = padding + col as f32 * (cell_width + padding);
+            let y = padding + row as f32 * (cell_height + padding);
             CellRect {
                 x,
                 y,

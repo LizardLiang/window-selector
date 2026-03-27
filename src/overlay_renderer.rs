@@ -20,9 +20,29 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetSystemMetrics, GetWindowRect, SM_CXPADDEDBORDER, SM_CXSIZEFRAME,
 };
 
-// Cell rendering constants — logical sizes scaled by DPI in draw_cell().
-const LABEL_FONT_SIZE: f32 = 18.0;
-const TITLE_FONT_SIZE: f32 = 13.0;
+/// Configuration for the overlay renderer — drives font sizes and background opacity.
+/// Passed to `OverlayRenderer::new_with_config` so changes from settings are applied
+/// on next overlay activation (font sizes require renderer recreation per locked decision #4;
+/// background_opacity is applied per-frame via `SetColor`).
+#[derive(Debug, Clone, Copy)]
+pub struct RenderConfig {
+    /// Letter label font size (logical pixels). Maps to `AppConfig.label_font_size`.
+    pub label_font_size: f32,
+    /// Window title font size (logical pixels). Maps to `AppConfig.title_font_size`.
+    pub title_font_size: f32,
+    /// Backdrop brush alpha channel (0.0–1.0). Maps to `AppConfig.background_opacity`.
+    pub background_opacity: f32,
+}
+
+impl Default for RenderConfig {
+    fn default() -> Self {
+        Self {
+            label_font_size: 18.0,
+            title_font_size: 13.0,
+            background_opacity: 0.86,
+        }
+    }
+}
 const BADGE_FONT_SIZE: f32 = 11.0;
 const CELL_CORNER_RADIUS: f32 = 12.0;
 const SELECTION_BORDER_WIDTH: f32 = 2.0;
@@ -99,11 +119,24 @@ pub struct OverlayRenderer {
 
     pub dpi_scale: f32,
     pub accent: AccentColor,
+    /// Background opacity for the backdrop brush — updated per-frame via SetColor().
+    pub background_opacity: f32,
 }
 
 impl OverlayRenderer {
-    /// Initialize Direct2D and DirectWrite for the given HWND.
+    /// Initialize Direct2D and DirectWrite for the given HWND with default config.
     pub fn new(hwnd: HWND, dpi_scale: f32, accent: AccentColor) -> windows::core::Result<Self> {
+        Self::new_with_config(hwnd, dpi_scale, accent, RenderConfig::default())
+    }
+
+    /// Initialize Direct2D and DirectWrite for the given HWND with config-driven parameters.
+    /// Font sizes come from `config`; background_opacity is stored and applied per-frame.
+    pub fn new_with_config(
+        hwnd: HWND,
+        dpi_scale: f32,
+        accent: AccentColor,
+        config: RenderConfig,
+    ) -> windows::core::Result<Self> {
         unsafe {
             // D2D factory
             let d2d_factory: ID2D1Factory =
@@ -112,7 +145,7 @@ impl OverlayRenderer {
             // DWrite factory
             let dwrite_factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
 
-            // Get client rect
+            // Get client rect using GetClientRect (handles DPI correctly)
             let mut client_rect = RECT::default();
             let _ = GetClientRect(hwnd, &mut client_rect);
             let width = (client_rect.right - client_rect.left) as u32;
@@ -142,8 +175,9 @@ impl OverlayRenderer {
             render_target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
 
             // Create brushes — refined dark palette with subtle cool tint
-            let backdrop_brush =
-                render_target.CreateSolidColorBrush(&d2d_color(0.02, 0.03, 0.06, 0.86), None)?;
+            // background_opacity is the initial alpha; it is updated per-frame via SetColor().
+            let backdrop_brush = render_target
+                .CreateSolidColorBrush(&d2d_color(0.02, 0.03, 0.06, config.background_opacity), None)?;
             let cell_bg_brush =
                 render_target.CreateSolidColorBrush(&d2d_color(0.07, 0.08, 0.12, 0.95), None)?;
             let cell_border_brush =
@@ -207,7 +241,7 @@ impl OverlayRenderer {
                 DWRITE_FONT_WEIGHT_BOLD,
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
-                LABEL_FONT_SIZE * dpi_scale,
+                config.label_font_size * dpi_scale,
                 PCWSTR(locale.as_ptr()),
             )?;
             label_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
@@ -219,7 +253,7 @@ impl OverlayRenderer {
                 DWRITE_FONT_WEIGHT_REGULAR,
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
-                TITLE_FONT_SIZE * dpi_scale,
+                config.title_font_size * dpi_scale,
                 PCWSTR(locale.as_ptr()),
             )?;
             title_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
@@ -281,6 +315,7 @@ impl OverlayRenderer {
                 quick_list_format,
                 dpi_scale,
                 accent,
+                background_opacity: config.background_opacity,
             })
         }
     }
@@ -323,6 +358,11 @@ impl OverlayRenderer {
     ) {
         unsafe {
             self.render_target.BeginDraw();
+
+            // Per-frame: update backdrop_brush alpha from background_opacity (locked decision #2).
+            // This allows opacity to change without recreating the renderer.
+            self.backdrop_brush
+                .SetColor(&d2d_color(0.02, 0.03, 0.06, self.background_opacity));
 
             // Clear to transparent
             self.render_target

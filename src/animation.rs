@@ -2,19 +2,10 @@
 /// The actual SetLayeredWindowAttributes calls are made by the overlay module
 /// on each WM_TIMER tick.
 
-/// Target alpha value when overlay is fully shown (not fully opaque — preserves backdrop bleed-through).
-pub const ALPHA_MAX: u8 = 220;
 /// Starting alpha (transparent).
 pub const ALPHA_MIN: u8 = 0;
 /// Timer interval in milliseconds (~60fps).
-#[allow(dead_code)]
 pub const FADE_TIMER_INTERVAL_MS: u32 = 16;
-/// Fade duration in milliseconds.
-#[allow(dead_code)]
-pub const FADE_DURATION_MS: u32 = 150;
-/// Alpha delta per timer tick.
-/// 220 / (150ms / 16ms) ≈ 220 / 9.4 ≈ 24
-pub const ALPHA_DELTA: u8 = 24;
 /// Timer ID for the fade animation.
 pub const FADE_TIMER_ID: usize = 1001;
 
@@ -27,32 +18,71 @@ pub enum FadeDirection {
 }
 
 /// Manages the current alpha value and fade state.
+/// Parameterized with `alpha_max` and `fade_duration_ms` at construction time
+/// so these values can be driven from `AppConfig`.
 #[derive(Debug, Clone)]
 pub struct FadeAnimator {
     pub current_alpha: u8,
     pub direction: Option<FadeDirection>,
+    /// Maximum alpha target (configurable via overlay_opacity).
+    pub alpha_max: u8,
+    /// Alpha change per timer tick, computed from alpha_max and fade_duration_ms.
+    pub alpha_delta: u8,
+    /// Whether fade_duration_ms was 0 (instant mode — skip animation entirely).
+    pub instant: bool,
 }
 
 impl FadeAnimator {
-    pub fn new() -> Self {
+    /// Create a new `FadeAnimator` with configurable alpha_max and fade_duration_ms.
+    ///
+    /// If `fade_duration_ms` is 0, the animator is in "instant" mode: `start_fade_in()`
+    /// immediately sets `current_alpha = alpha_max` with no intermediate ticks.
+    pub fn new_with_params(alpha_max: u8, fade_duration_ms: u32) -> Self {
+        let instant = fade_duration_ms == 0;
+        let alpha_delta = if instant || fade_duration_ms == 0 {
+            255 // not used in instant mode, but safe sentinel
+        } else {
+            let ticks = fade_duration_ms as f32 / FADE_TIMER_INTERVAL_MS as f32;
+            ((alpha_max as f32 / ticks).ceil() as u8).max(1)
+        };
         Self {
             current_alpha: ALPHA_MIN,
             direction: None,
+            alpha_max,
+            alpha_delta,
+            instant,
         }
     }
 
+    /// Create with default parameters (220 alpha_max, 150ms fade).
+    pub fn new() -> Self {
+        Self::new_with_params(220, 150)
+    }
+
     /// Start a fade-in animation.
+    /// In instant mode, immediately jumps to alpha_max with no intermediate state.
     #[allow(dead_code)]
     pub fn start_fade_in(&mut self) {
-        self.current_alpha = ALPHA_MIN;
-        self.direction = Some(FadeDirection::In);
+        if self.instant {
+            self.current_alpha = self.alpha_max;
+            self.direction = None;
+        } else {
+            self.current_alpha = ALPHA_MIN;
+            self.direction = Some(FadeDirection::In);
+        }
     }
 
     /// Start a fade-out animation.
+    /// In instant mode, immediately drops to ALPHA_MIN.
     #[allow(dead_code)]
     pub fn start_fade_out(&mut self) {
-        self.current_alpha = ALPHA_MAX;
-        self.direction = Some(FadeDirection::Out);
+        if self.instant {
+            self.current_alpha = ALPHA_MIN;
+            self.direction = None;
+        } else {
+            self.current_alpha = self.alpha_max;
+            self.direction = Some(FadeDirection::Out);
+        }
     }
 
     /// Advance the animation by one tick.
@@ -60,9 +90,9 @@ impl FadeAnimator {
     pub fn tick(&mut self) -> bool {
         match self.direction {
             Some(FadeDirection::In) => {
-                let new_alpha = self.current_alpha.saturating_add(ALPHA_DELTA);
-                if new_alpha >= ALPHA_MAX {
-                    self.current_alpha = ALPHA_MAX;
+                let new_alpha = self.current_alpha.saturating_add(self.alpha_delta);
+                if new_alpha >= self.alpha_max {
+                    self.current_alpha = self.alpha_max;
                     self.direction = None;
                     false // Animation complete
                 } else {
@@ -71,12 +101,12 @@ impl FadeAnimator {
                 }
             }
             Some(FadeDirection::Out) => {
-                if self.current_alpha <= ALPHA_DELTA {
+                if self.current_alpha <= self.alpha_delta {
                     self.current_alpha = ALPHA_MIN;
                     self.direction = None;
                     false // Animation complete
                 } else {
-                    self.current_alpha = self.current_alpha.saturating_sub(ALPHA_DELTA);
+                    self.current_alpha = self.current_alpha.saturating_sub(self.alpha_delta);
                     true // Still running
                 }
             }
@@ -102,7 +132,7 @@ mod tests {
 
     #[test]
     fn test_fade_in_reaches_max() {
-        let mut anim = FadeAnimator::new();
+        let mut anim = FadeAnimator::new_with_params(220, 150);
         anim.start_fade_in();
         assert!(anim.is_animating());
 
@@ -112,13 +142,13 @@ mod tests {
             ticks += 1;
             assert!(ticks < 20, "Fade-in should complete within 20 ticks");
         }
-        assert_eq!(anim.current_alpha, ALPHA_MAX);
+        assert_eq!(anim.current_alpha, 220);
         assert!(!anim.is_animating());
     }
 
     #[test]
     fn test_fade_out_reaches_min() {
-        let mut anim = FadeAnimator::new();
+        let mut anim = FadeAnimator::new_with_params(220, 150);
         anim.start_fade_out();
         assert!(anim.is_animating());
 
@@ -133,7 +163,7 @@ mod tests {
 
     #[test]
     fn test_alpha_increases_during_fade_in() {
-        let mut anim = FadeAnimator::new();
+        let mut anim = FadeAnimator::new_with_params(220, 150);
         anim.start_fade_in();
         let prev = anim.current_alpha;
         anim.tick();
@@ -142,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_alpha_decreases_during_fade_out() {
-        let mut anim = FadeAnimator::new();
+        let mut anim = FadeAnimator::new_with_params(220, 150);
         anim.start_fade_out();
         let prev = anim.current_alpha;
         anim.tick();
@@ -150,13 +180,47 @@ mod tests {
     }
 
     #[test]
-    fn test_constants_valid() {
-        assert_eq!(ALPHA_MAX, 220);
-        assert_eq!(ALPHA_MIN, 0);
-        assert_eq!(FADE_TIMER_INTERVAL_MS, 16);
-        assert!(ALPHA_DELTA > 0);
+    fn test_instant_fade_in_skips_animation() {
+        let mut anim = FadeAnimator::new_with_params(200, 0);
+        assert!(anim.instant);
+        anim.start_fade_in();
+        // Should immediately be at alpha_max with no animation active
+        assert_eq!(anim.current_alpha, 200);
+        assert!(!anim.is_animating());
+    }
+
+    #[test]
+    fn test_instant_fade_out_skips_animation() {
+        let mut anim = FadeAnimator::new_with_params(200, 0);
+        anim.current_alpha = 200;
+        anim.start_fade_out();
+        assert_eq!(anim.current_alpha, ALPHA_MIN);
+        assert!(!anim.is_animating());
+    }
+
+    #[test]
+    fn test_custom_alpha_max_respected() {
+        let mut anim = FadeAnimator::new_with_params(180, 100);
+        anim.start_fade_in();
+        while anim.tick() {}
+        assert_eq!(anim.current_alpha, 180);
+    }
+
+    #[test]
+    fn test_params_valid() {
+        let anim = FadeAnimator::new_with_params(220, 150);
+        assert_eq!(anim.alpha_max, 220);
+        assert!(!anim.instant);
+        assert!(anim.alpha_delta > 0);
         // Should complete in ~10 ticks: 220 / 24 ≈ 9.2
-        let expected_ticks = (ALPHA_MAX as f32 / ALPHA_DELTA as f32).ceil() as u32;
+        let expected_ticks = (anim.alpha_max as f32 / anim.alpha_delta as f32).ceil() as u32;
         assert!(expected_ticks <= 12, "Should complete in <= 12 ticks");
+    }
+
+    #[test]
+    fn test_new_uses_defaults() {
+        let anim = FadeAnimator::new();
+        assert_eq!(anim.alpha_max, 220);
+        assert!(!anim.instant);
     }
 }

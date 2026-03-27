@@ -2,9 +2,9 @@ use crate::accent_color::get_accent_color;
 use crate::animation::{FadeAnimator, FADE_TIMER_ID};
 use crate::dwm_thumbnails::{self, ThumbnailHandle};
 use crate::grid_layout::CellRect;
-use crate::grid_layout::{compute_grid, GridLayout, QUICK_LIST_BAR_HEIGHT};
+use crate::grid_layout::{compute_grid_with_padding, GridLayout, QUICK_LIST_BAR_HEIGHT};
 use crate::monitor::MonitorInfo;
-use crate::overlay_renderer::OverlayRenderer;
+use crate::overlay_renderer::{OverlayRenderer, RenderConfig};
 use crate::state::OverlayState;
 use crate::window_info::WindowInfo;
 use windows::core::PCWSTR;
@@ -230,7 +230,15 @@ impl OverlayManager {
     }
 
     /// Show the overlay and begin fade-in.
-    pub fn show(&mut self, windows: &[WindowInfo], state: &mut OverlayState) {
+    /// `alpha_max` and `render_config` are read from `AppConfig` at activation time.
+    pub fn show(
+        &mut self,
+        windows: &[WindowInfo],
+        state: &mut OverlayState,
+        alpha_max: u8,
+        grid_padding: f32,
+        render_config: RenderConfig,
+    ) {
         if self.overlay_hwnds.is_empty() {
             tracing::error!("No overlay HWNDs");
             return;
@@ -271,7 +279,7 @@ impl OverlayManager {
 
         // Reserve space at the bottom for the quick list bar.
         let grid_height = h - QUICK_LIST_BAR_HEIGHT;
-        let grid = compute_grid(windows.len(), w, grid_height);
+        let grid = compute_grid_with_padding(windows.len(), w, grid_height, grid_padding);
 
         // Register DWM thumbnails on the primary overlay HWND.
         let reg = dwm_thumbnails::register_thumbnails(self.overlay_hwnds[0], windows, &grid.cells);
@@ -295,7 +303,7 @@ impl OverlayManager {
             }
         };
         let accent = get_accent_color();
-        match OverlayRenderer::new(self.overlay_hwnds[0], dpi_scale, accent) {
+        match OverlayRenderer::new_with_config(self.overlay_hwnds[0], dpi_scale, accent, render_config) {
             Ok(r) => {
                 self.renderer = Some(r);
                 tracing::debug!("OverlayRenderer initialized (dpi_scale={})", dpi_scale);
@@ -310,12 +318,12 @@ impl OverlayManager {
         *state = OverlayState::Active { selected: None };
 
         unsafe {
-            // Set overlay windows to fully opaque (skipping fade animation).
+            // Set overlay windows to fully opaque using config-driven alpha_max.
             for &hwnd in &self.overlay_hwnds {
                 let _ = SetLayeredWindowAttributes(
                     hwnd,
                     windows::Win32::Foundation::COLORREF(0),
-                    crate::animation::ALPHA_MAX,
+                    alpha_max,
                     LWA_ALPHA,
                 );
             }
@@ -357,7 +365,12 @@ impl OverlayManager {
     }
 
     /// Show overlay in label mode (transparent background, labels only).
-    pub fn show_label_mode(&mut self, windows: &[WindowInfo], state: &mut OverlayState) {
+    pub fn show_label_mode(
+        &mut self,
+        windows: &[WindowInfo],
+        state: &mut OverlayState,
+        render_config: RenderConfig,
+    ) {
         if self.overlay_hwnds.is_empty() {
             tracing::error!("No overlay HWNDs");
             return;
@@ -432,7 +445,7 @@ impl OverlayManager {
             }
         };
         let accent = get_accent_color();
-        match OverlayRenderer::new(self.overlay_hwnds[0], dpi_scale, accent) {
+        match OverlayRenderer::new_with_config(self.overlay_hwnds[0], dpi_scale, accent, render_config) {
             Ok(r) => {
                 self.renderer = Some(r);
                 tracing::debug!(
