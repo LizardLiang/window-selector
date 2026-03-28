@@ -4,8 +4,9 @@ use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetShellWindow, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowRect, IsIconic, IsWindowVisible, GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    EnumWindows, GetClassNameW, GetShellWindow, GetWindow, GetWindowLongW, GetWindowRect,
+    GetWindowTextLengthW, GetWindowTextW, IsIconic, IsWindowVisible, GWL_EXSTYLE, GW_OWNER,
+    WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 
 /// Set of overlay HWNDs to exclude from the window snapshot.
@@ -103,6 +104,13 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> B
         return BOOL(1);
     }
 
+    // Skip windows that have an owner (e.g., dialogs, child windows, background containers)
+    // This matches Windows Alt+Tab behavior and filters out windows like Locu's blank background
+    let owner = GetWindow(hwnd, GW_OWNER);
+    if owner.is_ok() && owner.unwrap().0 != std::ptr::null_mut() {
+        return BOOL(1);
+    }
+
     // Skip tool windows (unless they also have WS_EX_APPWINDOW)
     let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
     let is_tool = (ex_style & WS_EX_TOOLWINDOW.0) != 0;
@@ -111,10 +119,38 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> B
         return BOOL(1);
     }
 
+    // Skip windows with WS_EX_NOACTIVATE (e.g., floating notes, overlay widgets)
+    // These are non-interactive overlays that should not appear in Alt+Tab
+    let is_noactivate = (ex_style & WS_EX_NOACTIVATE.0) != 0;
+    if is_noactivate && !is_app {
+        return BOOL(1);
+    }
+
     // Get window title
     let mut buf = vec![0u16; (title_len as usize) + 1];
     GetWindowTextW(hwnd, &mut buf);
     let title = String::from_utf16_lossy(&buf[..title_len as usize]);
+
+    // Get window class name for filtering
+    let mut class_buf = vec![0u16; 256];
+    let class_len = GetClassNameW(hwnd, &mut class_buf);
+    let class_name = if class_len > 0 {
+        String::from_utf16_lossy(&class_buf[..class_len as usize])
+    } else {
+        String::new()
+    };
+
+    // Skip known background/desktop window classes
+    let skip_classes = [
+        "Progman",                // Program Manager (desktop)
+        "WorkerW",                // Desktop Worker Window
+        "Shell_TrayWnd",          // Taskbar
+        "Shell_SecondaryTrayWnd", // Secondary taskbar on multi-monitor
+    ];
+
+    if skip_classes.iter().any(|&c| class_name == c) {
+        return BOOL(1);
+    }
 
     let is_minimized = IsIconic(hwnd).as_bool();
 
@@ -302,7 +338,11 @@ unsafe extern "system" fn z_order_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
 
 /// Returns `true` if `candidate` is fully covered by the windows that are strictly
 /// higher in Z-order (earlier in `z_order`).
-fn is_fully_occluded(candidate_hwnd: HWND, candidate_rect: SimpleRect, z_order: &[ZOrderEntry]) -> bool {
+fn is_fully_occluded(
+    candidate_hwnd: HWND,
+    candidate_rect: SimpleRect,
+    z_order: &[ZOrderEntry],
+) -> bool {
     // Find the candidate's position in Z-order
     let pos = match z_order.iter().position(|e| e.hwnd == candidate_hwnd) {
         Some(p) => p,
