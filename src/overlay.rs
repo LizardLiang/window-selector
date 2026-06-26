@@ -480,8 +480,36 @@ impl OverlayManager {
         *state = OverlayState::LabelMode { selected: None };
 
         unsafe {
-            // For label mode, use color-key transparency (like the label overlay in normal mode).
-            // RGB(1,1,1) will be transparent, everything else will be visible.
+            // Step 1: Show the window fully transparent (alpha=0) so the black
+            // uninitialized D2D surface is never visible. On the first activation
+            // the window starts at alpha=0 from create_windows(); on subsequent
+            // activations hide_windows() leaves LWA_COLORKEY set, so the stale
+            // black surface would flash. Forcing LWA_ALPHA with alpha=0 here
+            // guarantees invisibility regardless of prior state.
+            let _ = SetLayeredWindowAttributes(
+                self.overlay_hwnds[0],
+                windows::Win32::Foundation::COLORREF(0),
+                0, // fully transparent
+                LWA_ALPHA,
+            );
+
+            // Show the window (invisible due to alpha=0).
+            let _ = ShowWindow(self.overlay_hwnds[0], SW_SHOWNOACTIVATE);
+
+            // Take keyboard focus.
+            let _ = SetForegroundWindow(self.overlay_hwnds[0]);
+        }
+
+        // Step 2: Render labels onto the now-visible (but transparent) window.
+        // The D2D HwndRenderTarget requires the window to be shown for present
+        // to take effect, so this must come after ShowWindow.
+        self.render_frame();
+
+        unsafe {
+            // Step 3: Switch to color-key transparency now that the surface is
+            // filled with the key color (RGB 1,1,1). The labels are already
+            // painted, so the window transitions from invisible to showing only
+            // the label badges — no black flash.
             let _ = SetLayeredWindowAttributes(
                 self.overlay_hwnds[0],
                 windows::Win32::Foundation::COLORREF(0x00010101), // Color key: RGB(1,1,1)
@@ -489,18 +517,9 @@ impl OverlayManager {
                 LWA_COLORKEY,
             );
 
-            // Show only the primary overlay in label mode
-            let _ = ShowWindow(self.overlay_hwnds[0], SW_SHOWNOACTIVATE);
-
-            // Take keyboard focus.
-            let _ = SetForegroundWindow(self.overlay_hwnds[0]);
-
-            // Force repaint.
+            // Force
             let _ = InvalidateRect(self.overlay_hwnds[0], None, true);
         }
-
-        // Render labels immediately.
-        self.render_frame();
 
         tracing::info!("Label mode activated with {} windows", windows.len());
     }
