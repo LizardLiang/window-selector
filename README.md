@@ -25,12 +25,9 @@ A fast, zero-config Alt+Tab replacement for Windows 10/11. Press a hotkey to see
 
 ## Demo
 
-<!-- TODO: Add overlay screenshot at docs/screenshot.png, then uncomment:
 ![Window Selector overlay demo](docs/screenshot.png)
-Full-screen overlay with live DWM thumbnails, letter labels, and the Quick List bar at the bottom.
--->
 
-*Screenshot coming soon — a demo GIF of the letter-select flow is in the works.*
+Full-screen overlay with live DWM thumbnails and home-row letter labels — press a letter (A, S, D, …) to jump straight to that window.
 
 ## Features
 
