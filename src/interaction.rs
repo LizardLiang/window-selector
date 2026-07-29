@@ -3,7 +3,7 @@ use crate::window_info::WindowInfo;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A, VK_CONTROL,
-    VK_ESCAPE, VK_RETURN, VK_SPACE, VK_Z,
+    VK_ESCAPE, VK_RETURN, VK_SHIFT, VK_SPACE, VK_Z,
 };
 // VK_0 is used only in tests
 #[cfg(test)]
@@ -56,34 +56,52 @@ pub enum KeyAction {
     Dismiss,
     /// Tag was assigned to the selected window. Triggers persistence and redraw.
     TagAssigned { number: u8, hwnd: HWND },
+    /// Move the given HWND to the center of the monitor at `monitor_index`,
+    /// then switch focus to it and dismiss the overlay.
+    MoveToMonitor { hwnd: HWND, monitor_index: usize },
 }
 
 /// Handle a WM_KEYDOWN event while the overlay is active.
 /// Returns the action to take.
 /// When `direct_switch` is true, pressing a letter key immediately switches
 /// to the window instead of selecting it first.
+/// `monitor_count` bounds the Shift+1..9 "move to monitor" digit range.
 pub fn handle_key_down(
     vk_code: u32,
     state: &OverlayState,
     windows: &[WindowInfo],
     tags: &mut SessionTags,
     direct_switch: bool,
+    monitor_count: usize,
 ) -> KeyAction {
     // Use GetAsyncKeyState (physical key state) instead of GetKeyState
     // because the low-level keyboard hook swallows all keystrokes before the
-    // message queue processes them, so GetKeyState never sees Ctrl as pressed.
+    // message queue processes them, so GetKeyState never sees Ctrl/Shift as pressed.
     let ctrl_held = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 };
+    let shift_held = unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) < 0 };
 
-    handle_key_down_with_ctrl_state(vk_code, state, windows, tags, direct_switch, ctrl_held)
+    handle_key_down_with_modifiers(
+        vk_code,
+        state,
+        windows,
+        tags,
+        direct_switch,
+        monitor_count,
+        ctrl_held,
+        shift_held,
+    )
 }
 
-fn handle_key_down_with_ctrl_state(
+#[allow(clippy::too_many_arguments)]
+fn handle_key_down_with_modifiers(
     vk_code: u32,
     state: &OverlayState,
     windows: &[WindowInfo],
     tags: &mut SessionTags,
     direct_switch: bool,
+    monitor_count: usize,
     ctrl_held: bool,
+    shift_held: bool,
 ) -> KeyAction {
     match state {
         OverlayState::FadingOut { .. } => {
@@ -114,6 +132,22 @@ fn handle_key_down_with_ctrl_state(
                     };
                 }
             }
+        } else if shift_held {
+            // Shift+Number: move selected window to the center of monitor `num`.
+            if let OverlayState::Active {
+                selected: Some(idx),
+            } = state
+            {
+                let monitor_index = (num - 1) as usize;
+                if monitor_index < monitor_count {
+                    if let Some(window) = windows.get(*idx) {
+                        return KeyAction::MoveToMonitor {
+                            hwnd: window.hwnd,
+                            monitor_index,
+                        };
+                    }
+                }
+            }
         } else {
             // Number key alone: switch to tagged window
             if let Some(tagged_hwnd) = tags.get(num) {
@@ -132,9 +166,11 @@ fn handle_key_down_with_ctrl_state(
     // Letter keys (a-z) — select or switch to a window (or switch directly in label mode)
     // When Ctrl is held, always select (never direct-switch) so the user
     // can Ctrl+Letter to select, then Ctrl+Number to assign a quick-list tag.
+    // When Shift is held, always select (never direct-switch) so Shift+1..9 can
+    // move the selected window without accidentally switching to it first.
     if let Some(letter) = vk_to_letter(vk_code) {
         if let Some(idx) = crate::letter_assignment::find_by_letter(windows, letter) {
-            if direct_switch && !ctrl_held {
+            if direct_switch && !ctrl_held && !shift_held {
                 if let Some(window) = windows.get(idx) {
                     return KeyAction::SwitchTo(window.hwnd);
                 }
@@ -225,6 +261,9 @@ mod tests {
         OverlayState::Active { selected: sel }
     }
 
+    // Default monitor count for tests that don't exercise Shift+Number moves.
+    const DEFAULT_MONITOR_COUNT: usize = 9;
+
     fn handle_key_down_test(
         vk_code: u32,
         state: &OverlayState,
@@ -233,13 +272,38 @@ mod tests {
         direct_switch: bool,
         ctrl_held: bool,
     ) -> KeyAction {
-        super::handle_key_down_with_ctrl_state(
+        handle_key_down_test_full(
             vk_code,
             state,
             windows,
             tags,
             direct_switch,
             ctrl_held,
+            false,
+            DEFAULT_MONITOR_COUNT,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn handle_key_down_test_full(
+        vk_code: u32,
+        state: &OverlayState,
+        windows: &[WindowInfo],
+        tags: &mut SessionTags,
+        direct_switch: bool,
+        ctrl_held: bool,
+        shift_held: bool,
+        monitor_count: usize,
+    ) -> KeyAction {
+        super::handle_key_down_with_modifiers(
+            vk_code,
+            state,
+            windows,
+            tags,
+            direct_switch,
+            monitor_count,
+            ctrl_held,
+            shift_held,
         )
     }
 
@@ -536,6 +600,167 @@ mod tests {
         assert!(
             matches!(action, KeyAction::Select(0)),
             "Confirm mode: letter key should produce Select, got {:?}",
+            action
+        );
+    }
+
+    // --- Shift+Number moves the selected window to the corresponding monitor ---
+    #[test]
+    fn test_shift_number_with_selection_yields_move_to_monitor() {
+        let h = hwnd(77);
+        let mut w = WindowInfo::new(h, "Movable".into(), false, 0);
+        w.letter = Some('a');
+        let windows = vec![w];
+        let mut tags = SessionTags::new();
+        let state = active_state(Some(0));
+
+        // Shift+3 with at least 3 monitors → MoveToMonitor { monitor_index: 2 }
+        let action = handle_key_down_test_full(
+            VK_3.0 as u32,
+            &state,
+            &windows,
+            &mut tags,
+            false,
+            false,
+            true,
+            3,
+        );
+        assert!(
+            matches!(
+                action,
+                KeyAction::MoveToMonitor {
+                    hwnd: target,
+                    monitor_index: 2
+                } if target == h
+            ),
+            "Shift+3 with a selection should produce MoveToMonitor{{monitor_index: 2}}, got {:?}",
+            action
+        );
+    }
+
+    #[test]
+    fn test_shift_number_out_of_range_monitor_count_is_noop() {
+        let h = hwnd(77);
+        let mut w = WindowInfo::new(h, "Movable".into(), false, 0);
+        w.letter = Some('a');
+        let windows = vec![w];
+        let mut tags = SessionTags::new();
+        let state = active_state(Some(0));
+
+        // Shift+3 with only 2 monitors → out of range → None
+        let action = handle_key_down_test_full(
+            VK_3.0 as u32,
+            &state,
+            &windows,
+            &mut tags,
+            false,
+            false,
+            true,
+            2,
+        );
+        assert!(
+            matches!(action, KeyAction::None),
+            "Shift+3 with monitor_count == 2 should produce None, got {:?}",
+            action
+        );
+    }
+
+    #[test]
+    fn test_shift_number_with_no_selection_is_noop() {
+        let windows: Vec<WindowInfo> = vec![];
+        let mut tags = SessionTags::new();
+        let state = active_state(None);
+
+        let action = handle_key_down_test_full(
+            VK_1.0 as u32,
+            &state,
+            &windows,
+            &mut tags,
+            false,
+            false,
+            true,
+            9,
+        );
+        assert!(
+            matches!(action, KeyAction::None),
+            "Shift+1 with no selection should produce None, got {:?}",
+            action
+        );
+    }
+
+    #[test]
+    fn test_shift_number_in_label_mode_is_noop() {
+        let windows: Vec<WindowInfo> = vec![make_window_info(1, 'a')];
+        let mut tags = SessionTags::new();
+        let state = OverlayState::LabelMode { selected: Some(0) };
+
+        let action = handle_key_down_test_full(
+            VK_1.0 as u32,
+            &state,
+            &windows,
+            &mut tags,
+            false,
+            false,
+            true,
+            9,
+        );
+        assert!(
+            matches!(action, KeyAction::None),
+            "Shift+1 in LabelMode should produce None, got {:?}",
+            action
+        );
+    }
+
+    #[test]
+    fn test_shift_letter_selects_instead_of_switching_when_direct_switch() {
+        let h = hwnd(42);
+        let mut w = WindowInfo::new(h, "Test".into(), false, 0);
+        w.letter = Some('a');
+        let windows = vec![w];
+        let mut tags = SessionTags::new();
+        let state = active_state(None);
+
+        // direct_switch is true, but Shift is held → should select, not switch.
+        let action = handle_key_down_test_full(
+            VK_A.0 as u32,
+            &state,
+            &windows,
+            &mut tags,
+            true,
+            false,
+            true,
+            9,
+        );
+        assert!(
+            matches!(action, KeyAction::Select(0)),
+            "Shift+Letter under direct_switch should produce Select, got {:?}",
+            action
+        );
+    }
+
+    #[test]
+    fn test_plain_letter_still_switches_when_direct_switch() {
+        let h = hwnd(42);
+        let mut w = WindowInfo::new(h, "Test".into(), false, 0);
+        w.letter = Some('a');
+        let windows = vec![w];
+        let mut tags = SessionTags::new();
+        let state = active_state(None);
+
+        // No Shift, direct_switch true → still switches immediately (regression guard).
+        let action = handle_key_down_test_full(
+            VK_A.0 as u32,
+            &state,
+            &windows,
+            &mut tags,
+            true,
+            false,
+            false,
+            9,
+        );
+        assert!(
+            matches!(action, KeyAction::SwitchTo(_)),
+            "Plain letter under direct_switch should still produce SwitchTo, got {:?}",
             action
         );
     }
