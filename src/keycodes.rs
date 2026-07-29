@@ -2,12 +2,12 @@
 // so we suppress the dead_code lint for the whole module.
 #![allow(dead_code)]
 
-/// Centralized Windows virtual-key codes and hotkey modifier flags.
-///
-/// All values are `u32` to match the `RegisterHotKey` / `GetAsyncKeyState` APIs
-/// and the `AppConfig` serialization format.
-///
-/// Source: <https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes>
+//! Centralized Windows virtual-key codes and hotkey modifier flags.
+//!
+//! All values are `u32` to match the `RegisterHotKey` / `GetAsyncKeyState` APIs
+//! and the `AppConfig` serialization format.
+//!
+//! Source: <https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes>
 
 // ---------------------------------------------------------------------------
 // Hotkey modifier flags  (used with RegisterHotKey)

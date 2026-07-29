@@ -116,7 +116,6 @@ pub fn register_thumbnails(
                     opacity: 255,
                     fVisible: true.into(),
                     fSourceClientAreaOnly: true.into(),
-                    ..Default::default()
                 };
 
                 if let Err(e) = DwmUpdateThumbnailProperties(thumbnail_id, &props) {
@@ -165,7 +164,6 @@ pub fn update_thumbnail_dest(handle: &ThumbnailHandle, cell: &CellRect, opacity:
             opacity,
             fVisible: true.into(),
             fSourceClientAreaOnly: true.into(),
-            ..Default::default()
         };
         let _ = DwmUpdateThumbnailProperties(thumbnail_id, &props);
     }

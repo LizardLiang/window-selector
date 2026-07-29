@@ -683,193 +683,6 @@ impl Default for SettingsPanelManager {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::keycodes::{
-        is_modifier_only, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VK_A, VK_CONTROL,
-        VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_Q, VK_RCONTROL, VK_RMENU, VK_RSHIFT,
-        VK_RWIN, VK_SHIFT, VK_Y,
-    };
-
-    // TC-2.1: Recorder starts in Idle state
-    #[test]
-    fn test_recorder_starts_idle() {
-        let manager = SettingsPanelManager::new();
-        assert_eq!(manager.recorder, HotkeyRecorderState::Idle);
-    }
-
-    // TC-2.2: Recording state transitions — Idle to Recording
-    #[test]
-    fn test_recorder_state_transitions_idle_to_recording() {
-        // We test the enum structure directly without calling start_recording()
-        // (which requires AppState). The Recording variant must hold target + previous values.
-        let state = HotkeyRecorderState::Recording {
-            target: 1,
-            previous_modifiers: MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-            previous_vk: VK_Q,
-        };
-        assert_ne!(state, HotkeyRecorderState::Idle);
-        match state {
-            HotkeyRecorderState::Recording {
-                target,
-                previous_modifiers,
-                previous_vk,
-            } => {
-                assert_eq!(target, 1);
-                assert_eq!(previous_modifiers, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT);
-                assert_eq!(previous_vk, VK_Q);
-            }
-            _ => panic!("Expected Recording state"),
-        }
-    }
-
-    // TC-2.3: Escape cancel reverts to Idle with original combo preserved in enum
-    #[test]
-    fn test_cancel_recording_reverts_to_idle() {
-        // cancel_recording() is safe when hwnd=None (no Win32 calls made).
-        let mut manager = SettingsPanelManager::new();
-        // Manually set recorder to Recording state (bypass start_recording which needs AppState)
-        manager.recorder = HotkeyRecorderState::Recording {
-            target: 1,
-            previous_modifiers: MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-            previous_vk: VK_Q,
-        };
-        assert_ne!(manager.recorder, HotkeyRecorderState::Idle);
-
-        // cancel_recording is safe: ll_hook is None (no UnhookWindowsHookEx call)
-        // and hwnd is None (no InvalidateRect call).
-        manager.cancel_recording();
-
-        assert_eq!(manager.recorder, HotkeyRecorderState::Idle);
-    }
-
-    // TC-2.4: Modifier-only VK codes are correctly identified as modifier-only
-    #[test]
-    fn test_is_modifier_only_identifies_modifier_keys() {
-        // All modifier keycodes must return true
-        assert!(
-            is_modifier_only(VK_SHIFT),
-            "VK_SHIFT should be modifier-only"
-        );
-        assert!(
-            is_modifier_only(VK_CONTROL),
-            "VK_CONTROL should be modifier-only"
-        );
-        assert!(
-            is_modifier_only(VK_MENU),
-            "VK_MENU (Alt) should be modifier-only"
-        );
-        assert!(
-            is_modifier_only(VK_LSHIFT),
-            "VK_LSHIFT should be modifier-only"
-        );
-        assert!(
-            is_modifier_only(VK_RSHIFT),
-            "VK_RSHIFT should be modifier-only"
-        );
-        assert!(
-            is_modifier_only(VK_LCONTROL),
-            "VK_LCONTROL should be modifier-only"
-        );
-        assert!(
-            is_modifier_only(VK_RCONTROL),
-            "VK_RCONTROL should be modifier-only"
-        );
-        assert!(
-            is_modifier_only(VK_LMENU),
-            "VK_LMENU should be modifier-only"
-        );
-        assert!(
-            is_modifier_only(VK_RMENU),
-            "VK_RMENU should be modifier-only"
-        );
-        assert!(is_modifier_only(VK_LWIN), "VK_LWIN should be modifier-only");
-        assert!(is_modifier_only(VK_RWIN), "VK_RWIN should be modifier-only");
-    }
-
-    // TC-2.4 (continued): Non-modifier keys must NOT be identified as modifier-only
-    #[test]
-    fn test_is_modifier_only_rejects_non_modifier_keys() {
-        assert!(!is_modifier_only(VK_A), "VK_A should not be modifier-only");
-        assert!(!is_modifier_only(VK_Q), "VK_Q should not be modifier-only");
-        assert!(!is_modifier_only(VK_Y), "VK_Y should not be modifier-only");
-        assert!(!is_modifier_only(0x70), "F1 should not be modifier-only");
-        assert!(
-            !is_modifier_only(0x20),
-            "VK_SPACE should not be modifier-only"
-        );
-    }
-
-    // TC-2.5: Valid combo (modifier + non-modifier) passes validation
-    // The hook requires at least one modifier flag besides MOD_NOREPEAT.
-    // We replicate the ll_keyboard_proc validation logic here as a pure test.
-    #[test]
-    fn test_valid_combo_has_modifier_flag() {
-        // MOD_NOREPEAT is 0x4000; mask it out to check real modifiers.
-        let modifiers_ctrl_alt = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
-        let has_modifier = (modifiers_ctrl_alt & !0x4000u32) != 0;
-        assert!(
-            has_modifier,
-            "Ctrl+Alt combo should have at least one modifier"
-        );
-
-        let modifiers_win = MOD_WIN | MOD_NOREPEAT;
-        let has_modifier = (modifiers_win & !0x4000u32) != 0;
-        assert!(has_modifier, "Win combo should have at least one modifier");
-
-        let modifiers_shift = MOD_SHIFT | MOD_NOREPEAT;
-        let has_modifier = (modifiers_shift & !0x4000u32) != 0;
-        assert!(
-            has_modifier,
-            "Shift combo should have at least one modifier"
-        );
-    }
-
-    // TC-2.5 (continued): MOD_NOREPEAT alone is not a valid modifier combo
-    #[test]
-    fn test_norepeat_only_fails_validation() {
-        // If only MOD_NOREPEAT is set, the combo has no real modifier.
-        let modifiers_none = MOD_NOREPEAT; // 0x4000 only
-        let has_modifier = (modifiers_none & !0x4000u32) != 0;
-        assert!(
-            !has_modifier,
-            "MOD_NOREPEAT alone should not count as a modifier"
-        );
-    }
-
-    // TC-2.6: Self-conflict detection (same VK+mods for both hotkeys)
-    // Pure config comparison: detect when main and label hotkeys share the same combo.
-    #[test]
-    fn test_self_conflict_detection_same_combo() {
-        use crate::config::AppConfig;
-        let mut config = AppConfig::default();
-        // Give both hotkeys the same combination
-        config.hotkey_modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
-        config.hotkey_vk = VK_Q;
-        config.label_hotkey_modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
-        config.label_hotkey_vk = VK_Q;
-
-        let conflict = config.hotkey_vk == config.label_hotkey_vk
-            && config.hotkey_modifiers == config.label_hotkey_modifiers;
-        assert!(
-            conflict,
-            "Same vk+mods for both hotkeys should be detected as conflict"
-        );
-    }
-
-    // TC-2.6 (continued): Different combos should not conflict
-    #[test]
-    fn test_self_conflict_detection_different_combos() {
-        use crate::config::AppConfig;
-        let config = AppConfig::default();
-        // Default: main = Ctrl+Alt+Q, label = Win+Y
-        let conflict = config.hotkey_vk == config.label_hotkey_vk
-            && config.hotkey_modifiers == config.label_hotkey_modifiers;
-        assert!(!conflict, "Different vk+mods combos should not conflict");
-    }
-}
-
 /// Low-level keyboard hook callback — captures key combinations during recording mode.
 /// Installed only when `HotkeyRecorderState::Recording` is active.
 unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -1033,5 +846,194 @@ pub unsafe extern "system" fn settings_wndproc(
         WM_DESTROY => LRESULT(0),
 
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keycodes::{
+        is_modifier_only, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VK_A, VK_CONTROL,
+        VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_Q, VK_RCONTROL, VK_RMENU, VK_RSHIFT,
+        VK_RWIN, VK_SHIFT, VK_Y,
+    };
+
+    // TC-2.1: Recorder starts in Idle state
+    #[test]
+    fn test_recorder_starts_idle() {
+        let manager = SettingsPanelManager::new();
+        assert_eq!(manager.recorder, HotkeyRecorderState::Idle);
+    }
+
+    // TC-2.2: Recording state transitions — Idle to Recording
+    #[test]
+    fn test_recorder_state_transitions_idle_to_recording() {
+        // We test the enum structure directly without calling start_recording()
+        // (which requires AppState). The Recording variant must hold target + previous values.
+        let state = HotkeyRecorderState::Recording {
+            target: 1,
+            previous_modifiers: MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+            previous_vk: VK_Q,
+        };
+        assert_ne!(state, HotkeyRecorderState::Idle);
+        match state {
+            HotkeyRecorderState::Recording {
+                target,
+                previous_modifiers,
+                previous_vk,
+            } => {
+                assert_eq!(target, 1);
+                assert_eq!(previous_modifiers, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT);
+                assert_eq!(previous_vk, VK_Q);
+            }
+            _ => panic!("Expected Recording state"),
+        }
+    }
+
+    // TC-2.3: Escape cancel reverts to Idle with original combo preserved in enum
+    #[test]
+    fn test_cancel_recording_reverts_to_idle() {
+        // cancel_recording() is safe when hwnd=None (no Win32 calls made).
+        let mut manager = SettingsPanelManager::new();
+        // Manually set recorder to Recording state (bypass start_recording which needs AppState)
+        manager.recorder = HotkeyRecorderState::Recording {
+            target: 1,
+            previous_modifiers: MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+            previous_vk: VK_Q,
+        };
+        assert_ne!(manager.recorder, HotkeyRecorderState::Idle);
+
+        // cancel_recording is safe: ll_hook is None (no UnhookWindowsHookEx call)
+        // and hwnd is None (no InvalidateRect call).
+        manager.cancel_recording();
+
+        assert_eq!(manager.recorder, HotkeyRecorderState::Idle);
+    }
+
+    // TC-2.4: Modifier-only VK codes are correctly identified as modifier-only
+    #[test]
+    fn test_is_modifier_only_identifies_modifier_keys() {
+        // All modifier keycodes must return true
+        assert!(
+            is_modifier_only(VK_SHIFT),
+            "VK_SHIFT should be modifier-only"
+        );
+        assert!(
+            is_modifier_only(VK_CONTROL),
+            "VK_CONTROL should be modifier-only"
+        );
+        assert!(
+            is_modifier_only(VK_MENU),
+            "VK_MENU (Alt) should be modifier-only"
+        );
+        assert!(
+            is_modifier_only(VK_LSHIFT),
+            "VK_LSHIFT should be modifier-only"
+        );
+        assert!(
+            is_modifier_only(VK_RSHIFT),
+            "VK_RSHIFT should be modifier-only"
+        );
+        assert!(
+            is_modifier_only(VK_LCONTROL),
+            "VK_LCONTROL should be modifier-only"
+        );
+        assert!(
+            is_modifier_only(VK_RCONTROL),
+            "VK_RCONTROL should be modifier-only"
+        );
+        assert!(
+            is_modifier_only(VK_LMENU),
+            "VK_LMENU should be modifier-only"
+        );
+        assert!(
+            is_modifier_only(VK_RMENU),
+            "VK_RMENU should be modifier-only"
+        );
+        assert!(is_modifier_only(VK_LWIN), "VK_LWIN should be modifier-only");
+        assert!(is_modifier_only(VK_RWIN), "VK_RWIN should be modifier-only");
+    }
+
+    // TC-2.4 (continued): Non-modifier keys must NOT be identified as modifier-only
+    #[test]
+    fn test_is_modifier_only_rejects_non_modifier_keys() {
+        assert!(!is_modifier_only(VK_A), "VK_A should not be modifier-only");
+        assert!(!is_modifier_only(VK_Q), "VK_Q should not be modifier-only");
+        assert!(!is_modifier_only(VK_Y), "VK_Y should not be modifier-only");
+        assert!(!is_modifier_only(0x70), "F1 should not be modifier-only");
+        assert!(
+            !is_modifier_only(0x20),
+            "VK_SPACE should not be modifier-only"
+        );
+    }
+
+    // TC-2.5: Valid combo (modifier + non-modifier) passes validation
+    // The hook requires at least one modifier flag besides MOD_NOREPEAT.
+    // We replicate the ll_keyboard_proc validation logic here as a pure test.
+    #[test]
+    fn test_valid_combo_has_modifier_flag() {
+        // MOD_NOREPEAT is 0x4000; mask it out to check real modifiers.
+        let modifiers_ctrl_alt = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+        let has_modifier = (modifiers_ctrl_alt & !0x4000u32) != 0;
+        assert!(
+            has_modifier,
+            "Ctrl+Alt combo should have at least one modifier"
+        );
+
+        let modifiers_win = MOD_WIN | MOD_NOREPEAT;
+        let has_modifier = (modifiers_win & !0x4000u32) != 0;
+        assert!(has_modifier, "Win combo should have at least one modifier");
+
+        let modifiers_shift = MOD_SHIFT | MOD_NOREPEAT;
+        let has_modifier = (modifiers_shift & !0x4000u32) != 0;
+        assert!(
+            has_modifier,
+            "Shift combo should have at least one modifier"
+        );
+    }
+
+    // TC-2.5 (continued): MOD_NOREPEAT alone is not a valid modifier combo
+    #[test]
+    fn test_norepeat_only_fails_validation() {
+        // If only MOD_NOREPEAT is set, the combo has no real modifier.
+        let modifiers_none = MOD_NOREPEAT; // 0x4000 only
+        let has_modifier = (modifiers_none & !0x4000u32) != 0;
+        assert!(
+            !has_modifier,
+            "MOD_NOREPEAT alone should not count as a modifier"
+        );
+    }
+
+    // TC-2.6: Self-conflict detection (same VK+mods for both hotkeys)
+    // Pure config comparison: detect when main and label hotkeys share the same combo.
+    #[test]
+    fn test_self_conflict_detection_same_combo() {
+        use crate::config::AppConfig;
+        // Give both hotkeys the same combination
+        let config = AppConfig {
+            hotkey_modifiers: MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+            hotkey_vk: VK_Q,
+            label_hotkey_modifiers: MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+            label_hotkey_vk: VK_Q,
+            ..Default::default()
+        };
+
+        let conflict = config.hotkey_vk == config.label_hotkey_vk
+            && config.hotkey_modifiers == config.label_hotkey_modifiers;
+        assert!(
+            conflict,
+            "Same vk+mods for both hotkeys should be detected as conflict"
+        );
+    }
+
+    // TC-2.6 (continued): Different combos should not conflict
+    #[test]
+    fn test_self_conflict_detection_different_combos() {
+        use crate::config::AppConfig;
+        let config = AppConfig::default();
+        // Default: main = Ctrl+Alt+Q, label = Win+Y
+        let conflict = config.hotkey_vk == config.label_hotkey_vk
+            && config.hotkey_modifiers == config.label_hotkey_modifiers;
+        assert!(!conflict, "Different vk+mods combos should not conflict");
     }
 }

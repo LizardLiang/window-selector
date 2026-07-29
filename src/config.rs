@@ -345,13 +345,15 @@ mod tests {
 
     #[test]
     fn test_validate_clamps_out_of_range_values() {
-        let mut config = AppConfig::default();
-        config.overlay_opacity = 10; // below min 50
-        config.fade_duration_ms = 9999; // above max 500
-        config.grid_padding = 0.5; // below min 4.0
-        config.label_font_size = 100.0; // above max 32.0
-        config.title_font_size = 1.0; // below min 8.0
-        config.background_opacity = 5.0; // above max 1.0
+        let mut config = AppConfig {
+            overlay_opacity: 10,     // below min 50
+            fade_duration_ms: 9999,  // above max 500
+            grid_padding: 0.5,       // below min 4.0
+            label_font_size: 100.0,  // above max 32.0
+            title_font_size: 1.0,    // below min 8.0
+            background_opacity: 5.0, // above max 1.0
+            ..Default::default()
+        };
         config.validate();
         assert_eq!(config.overlay_opacity, 50);
         assert_eq!(config.fade_duration_ms, 500);

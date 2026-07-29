@@ -78,7 +78,7 @@ impl MruTracker {
     }
 
     /// Sort a window list by MRU order. Windows not in the MRU list are appended at the end.
-    pub fn sort_by_mru(&self, windows: &mut Vec<crate::window_info::WindowInfo>) {
+    pub fn sort_by_mru(&self, windows: &mut [crate::window_info::WindowInfo]) {
         // Build a position map from HWND to MRU index
         let mru_pos: std::collections::HashMap<isize, usize> = self
             .order

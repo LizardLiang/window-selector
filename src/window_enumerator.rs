@@ -112,7 +112,7 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> B
     // Skip windows that have an owner (e.g., dialogs, child windows, background containers)
     // This matches Windows Alt+Tab behavior and filters out windows like Locu's blank background
     let owner = GetWindow(hwnd, GW_OWNER);
-    if owner.is_ok() && owner.unwrap().0 != std::ptr::null_mut() {
+    if owner.is_ok_and(|o| !o.0.is_null()) {
         return BOOL(1);
     }
 

@@ -10,7 +10,7 @@ pub const LETTER_SEQUENCE: [char; 26] = [
 ];
 
 /// Assign letters to windows in order. Windows beyond position 26 receive None.
-pub fn assign_letters(windows: &mut Vec<WindowInfo>) {
+pub fn assign_letters(windows: &mut [WindowInfo]) {
     for (i, window) in windows.iter_mut().enumerate() {
         window.letter = if i < LETTER_SEQUENCE.len() {
             Some(LETTER_SEQUENCE[i])
@@ -76,15 +76,11 @@ mod tests {
     fn test_windows_beyond_26_get_none() {
         let mut windows = make_windows(30);
         assign_letters(&mut windows);
-        for i in 0..26 {
-            assert!(
-                windows[i].letter.is_some(),
-                "Index {} should have a letter",
-                i
-            );
+        for (i, window) in windows.iter().take(26).enumerate() {
+            assert!(window.letter.is_some(), "Index {} should have a letter", i);
         }
-        for i in 26..30 {
-            assert_eq!(windows[i].letter, None, "Index {} should have None", i);
+        for (i, window) in windows.iter().enumerate().skip(26) {
+            assert_eq!(window.letter, None, "Index {} should have None", i);
         }
     }
 
@@ -93,7 +89,7 @@ mod tests {
         assert_eq!(LETTER_SEQUENCE.len(), 26);
         // All entries must be lowercase letters a-z
         for &c in &LETTER_SEQUENCE {
-            assert!(c >= 'a' && c <= 'z', "Expected a-z, got '{}'", c);
+            assert!(c.is_ascii_lowercase(), "Expected a-z, got '{}'", c);
             assert_ne!(c, ';', "Semicolon must not be in sequence");
         }
         // No duplicates
