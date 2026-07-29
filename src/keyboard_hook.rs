@@ -10,11 +10,12 @@
 /// SetWindowsHookExW) because WH_KEYBOARD_LL callbacks are always dispatched on
 /// the installing thread's message loop. We therefore access APP_STATE_PTR with
 /// the same Relaxed ordering used everywhere else in the codebase.
+use crate::keycodes::{VK_LSHIFT, VK_RSHIFT, VK_SHIFT};
 use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 /// Whether the overlay is currently active and should consume key presses.
@@ -30,6 +31,22 @@ pub type KeyHandler = fn(vk_code: u32) -> bool;
 
 /// Global key handler fn pointer (set once before hook is installed).
 static KEY_HANDLER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A callback type that reports Shift key transitions while the overlay is
+/// active. `shift_down` is `true` on WM_KEYDOWN/WM_SYSKEYDOWN for a Shift
+/// virtual key, `false` on WM_KEYUP/WM_SYSKEYUP. Unlike `KeyHandler`, the
+/// return value here does not affect swallow behavior — key-up events are
+/// never swallowed regardless of what this callback does.
+pub type ModifierHandler = fn(shift_down: bool);
+
+/// Global modifier handler fn pointer (set once before hook is installed).
+static MODIFIER_HANDLER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Install the callback invoked on Shift press/release while the overlay is
+/// active. Must be called from the message pump thread, same as `install`.
+pub fn install_modifier_handler(handler: ModifierHandler) {
+    MODIFIER_HANDLER.store(handler as usize, Ordering::Relaxed);
+}
 
 /// Install the low-level keyboard hook.
 ///
@@ -104,12 +121,27 @@ unsafe extern "system" fn ll_keyboard_proc(
 
     let msg_id = w_param.0 as u32;
     let is_keydown = msg_id == WM_KEYDOWN || msg_id == WM_SYSKEYDOWN;
+    let is_keyup = msg_id == WM_KEYUP || msg_id == WM_SYSKEYUP;
 
-    if is_keydown && HOOK_ACTIVE.load(Ordering::Relaxed) {
-        if l_param.0 != 0 {
-            let kbd = &*(l_param.0 as *const KBDLLHOOKSTRUCT);
-            let vk = kbd.vkCode;
+    if HOOK_ACTIVE.load(Ordering::Relaxed) && (is_keydown || is_keyup) && l_param.0 != 0 {
+        let kbd = &*(l_param.0 as *const KBDLLHOOKSTRUCT);
+        let vk = kbd.vkCode;
 
+        // Shift press/release is reported to a separate modifier callback so the
+        // overlay can toggle monitor-badge visibility while Shift is held. This
+        // check runs for BOTH keydown and keyup — but keyup is never swallowed
+        // below (only the `is_keydown` branch can return LRESULT(1)), so Shift
+        // release always reaches CallNextHookEx and can never get "stuck down"
+        // in whatever application regains focus.
+        if vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT {
+            let modifier_ptr = MODIFIER_HANDLER.load(Ordering::Relaxed);
+            if modifier_ptr != 0 {
+                let handler: ModifierHandler = std::mem::transmute(modifier_ptr);
+                handler(is_keydown);
+            }
+        }
+
+        if is_keydown {
             let handler_ptr = KEY_HANDLER.load(Ordering::Relaxed);
             if handler_ptr != 0 {
                 let handler: KeyHandler = std::mem::transmute(handler_ptr);

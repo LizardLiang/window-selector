@@ -25,10 +25,12 @@ mod tray;
 mod window_enumerator;
 mod window_icon;
 mod window_info;
+mod window_mover;
 mod window_switcher;
 
 use config::AppConfig;
 use interaction::{handle_key_down, KeyAction};
+use keycodes::VK_SHIFT;
 use monitor::get_all_monitors;
 use mru_tracker::MruTracker;
 use overlay::OverlayManager;
@@ -45,13 +47,14 @@ use window_switcher::{restore_focus, switch_to_window};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, DrawTextW, EndPaint, FillRect, RoundRect,
-    SelectObject, SetBkMode, SetTextColor, DT_CENTER, DT_SINGLELINE, DT_VCENTER, PAINTSTRUCT,
-    PS_NULL, TRANSPARENT,
+    BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, DrawTextW, EndPaint, FillRect,
+    InvalidateRect, RoundRect, SelectObject, SetBkMode, SetTextColor, DT_CENTER, DT_SINGLELINE,
+    DT_VCENTER, HDC, PAINTSTRUCT, PS_NULL, TRANSPARENT,
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::DrawIconEx;
 use windows::Win32::UI::WindowsAndMessaging::DI_NORMAL;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -92,6 +95,14 @@ pub(crate) struct AppState {
     /// lifetime of the message loop.
     pub(crate) broadcast_hwnd: HWND,
     pub(crate) settings_panel: settings_panel::SettingsPanelManager,
+    /// Whether monitor-number badge chips should be drawn right now. Lives on
+    /// `AppState` (rather than `OverlayManager`) because it is toggled by the
+    /// keyboard hook's modifier callback, which already reaches `AppState` via
+    /// `get_app_state()` — no existing code path threads a raw Shift signal
+    /// through `OverlayManager` today. Only meaningful while `overlay_state`
+    /// is `Active`; reset to `false` on every activate/dismiss so a stale
+    /// `true` can never leak into the next session.
+    pub(crate) shift_badges_visible: bool,
 }
 
 /// Global pointer to `AppState`, stored as an atomic integer so the static is safe
@@ -326,6 +337,7 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
         msg_hwnd,
         broadcast_hwnd,
         settings_panel: settings_panel::SettingsPanelManager::new(),
+        shift_badges_visible: false,
     });
 
     // Set global pointer — valid for the lifetime of the message loop.
@@ -401,6 +413,7 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
     // Install the low-level keyboard hook.  The hook starts inactive; it is
     // enabled in activate_overlay() and disabled when the overlay hides.
     keyboard_hook::install(keyboard_hook_handler);
+    keyboard_hook::install_modifier_handler(shift_modifier_handler);
 
     tracing::info!("Entering message loop");
 
@@ -511,8 +524,27 @@ unsafe extern "system" fn overlay_wndproc(
             }
             let app = &mut *app_ptr;
 
-            // Only paint the label overlay HWND (not the thumbnail overlay).
+            // Only the label overlay HWND (primary monitor) and secondary monitor
+            // thumbnail overlays get custom GDI content. The primary thumbnail
+            // overlay (overlay_hwnds[0]) is painted by the Direct2D renderer instead.
             if app.overlay_manager.label_hwnd != Some(hwnd) {
+                if matches!(app.overlay_state, OverlayState::Active { .. }) {
+                    if let Some(idx) = app
+                        .overlay_manager
+                        .overlay_hwnds
+                        .iter()
+                        .position(|&h| h == hwnd)
+                    {
+                        if idx > 0 {
+                            paint_secondary_monitor_overlay(
+                                hwnd,
+                                idx + 1,
+                                app.shift_badges_visible,
+                            );
+                            return LRESULT(0);
+                        }
+                    }
+                }
                 return DefWindowProcW(hwnd, msg, wparam, lparam);
             }
 
@@ -528,6 +560,12 @@ unsafe extern "system" fn overlay_wndproc(
             let key_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00010101));
             FillRect(hdc, &ps.rcPaint, key_brush);
             let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
+
+            // Primary monitor's number badge ("1"), styled to match secondary screens.
+            // Only drawn while Shift is physically held.
+            if app.shift_badges_visible {
+                draw_monitor_badge_chip(hdc, 1);
+            }
 
             // Draw letter badges and number tags, positioned on the actual thumbnail bounds.
             if let Some(layout) = &app.overlay_manager.grid_layout {
@@ -736,6 +774,99 @@ unsafe extern "system" fn overlay_wndproc(
     }
 }
 
+/// Paint a secondary monitor's thumbnail overlay: a dark backdrop (matching the
+/// primary monitor's Direct2D backdrop color) plus its monitor-number badge.
+/// Secondary overlay HWNDs have no Direct2D renderer bound (only overlay_hwnds[0]
+/// does), so this GDI path is their only visible content while the overlay is Active.
+unsafe fn paint_secondary_monitor_overlay(hwnd: HWND, monitor_number: usize, show_badge: bool) {
+    let mut ps = PAINTSTRUCT::default();
+    let hdc = BeginPaint(hwnd, &mut ps);
+
+    // Dark backdrop approximating the primary monitor's D2D backdrop color
+    // (RGB ~5,8,15 in overlay_renderer.rs) so secondary screens read consistently.
+    // Filled unconditionally — the dimmed appearance stays even when the
+    // monitor-number badge itself is hidden (Shift not held).
+    let backdrop_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x000F0805));
+    FillRect(hdc, &ps.rcPaint, backdrop_brush);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(backdrop_brush);
+
+    if show_badge {
+        draw_monitor_badge_chip(hdc, monitor_number);
+    }
+
+    let _ = EndPaint(hwnd, &ps);
+}
+
+/// Draw a monitor-number chip ("1", "2", ...) in the top-left corner of `hdc`.
+/// Shared by the primary monitor's label overlay paint path and each secondary
+/// monitor's own WM_PAINT branch so the two look identical.
+unsafe fn draw_monitor_badge_chip(hdc: HDC, monitor_number: usize) {
+    let margin: i32 = 40;
+    let chip_w: i32 = 110;
+    let chip_h: i32 = 96;
+    let corner_sz: i32 = 20;
+
+    let chip_rect = RECT {
+        left: margin,
+        top: margin,
+        right: margin + chip_w,
+        bottom: margin + chip_h,
+    };
+
+    let font = CreateFontW(
+        72,
+        0,
+        0,
+        0,
+        700, // bold
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        windows::core::w!("Segoe UI"),
+    );
+    let old_font = SelectObject(hdc, font);
+    SetBkMode(hdc, TRANSPARENT);
+
+    // Null pen so RoundRect doesn't draw an outline stroke.
+    let null_pen = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
+    let old_pen = SelectObject(hdc, null_pen);
+
+    // Same accent-orange fill as the letter badges, white text on top.
+    let chip_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00CC6600));
+    let old_brush = SelectObject(hdc, chip_brush);
+    let _ = RoundRect(
+        hdc,
+        chip_rect.left,
+        chip_rect.top,
+        chip_rect.right,
+        chip_rect.bottom,
+        corner_sz,
+        corner_sz,
+    );
+    SelectObject(hdc, old_brush);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(chip_brush);
+
+    SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+    let mut text: Vec<u16> = monitor_number.to_string().encode_utf16().collect();
+    let mut text_rect = chip_rect;
+    DrawTextW(
+        hdc,
+        &mut text,
+        &mut text_rect,
+        DT_CENTER | DT_SINGLELINE | DT_VCENTER,
+    );
+
+    SelectObject(hdc, old_pen);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
+    SelectObject(hdc, old_font);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
+}
+
 unsafe fn handle_hotkey(app: &mut AppState) {
     tracing::debug!("WM_HOTKEY received");
 
@@ -787,10 +918,18 @@ unsafe fn activate_overlay(app: &mut AppState) {
     // Activate the keyboard hook so key presses reach the overlay regardless
     // of whether SetForegroundWindow succeeded.
     keyboard_hook::set_active(true);
+
+    // Seed monitor-badge visibility from the Shift key's current physical
+    // state, so badges are already showing if the user opened the overlay
+    // with Shift already held down.
+    app.shift_badges_visible = GetAsyncKeyState(VK_SHIFT as i32) < 0;
 }
 
 /// Dismiss the overlay without switching to any window; restore previous foreground.
 unsafe fn dismiss_overlay(app: &mut AppState) {
+    // Reset so a Shift key still physically held (e.g. Shift+1 moved a window
+    // and dismissed the overlay) can't leak a stale `true` into the next session.
+    app.shift_badges_visible = false;
     let prev = app.previous_foreground.take();
     app.overlay_manager.begin_hide(&mut app.overlay_state, None);
     if let Some(prev) = prev {
@@ -854,10 +993,14 @@ unsafe fn activate_label_mode(app: &mut AppState) {
 
     // Activate the keyboard hook
     keyboard_hook::set_active(true);
+
+    // Label mode never shows monitor badges; keep the flag clean regardless.
+    app.shift_badges_visible = false;
 }
 
 /// Dismiss label mode without switching to any window.
 unsafe fn dismiss_label_mode(app: &mut AppState) {
+    app.shift_badges_visible = false;
     let prev = app.previous_foreground.take();
     app.overlay_manager.begin_hide(&mut app.overlay_state, None);
     if let Some(prev) = prev {
@@ -914,6 +1057,48 @@ fn keyboard_hook_handler(vk_code: u32) -> bool {
     }
 }
 
+/// Low-level keyboard hook's Shift-modifier callback (see `keyboard_hook::ModifierHandler`).
+/// Fired on every Shift press/release while the hook is active — including
+/// auto-repeat keydowns from a held key, so `set_shift_badges_visible` must
+/// no-op when the flag hasn't actually changed to avoid repainting on every
+/// repeat tick.
+fn shift_modifier_handler(shift_down: bool) {
+    unsafe { set_shift_badges_visible(shift_down) };
+}
+
+/// Pure decision extracted from `set_shift_badges_visible`: should the flag be
+/// updated (and the overlay repainted) for this Shift transition? Only `true`
+/// when the overlay is `Active` AND the incoming value actually differs from
+/// the current one — this is what suppresses repeated repaints while Shift is
+/// held down and auto-repeat keydowns keep reporting `shift_down: true`.
+fn should_update_shift_badges(overlay_state: &OverlayState, current: bool, new_value: bool) -> bool {
+    matches!(overlay_state, OverlayState::Active { .. }) && current != new_value
+}
+
+/// Update `shift_badges_visible` and repaint the overlay if the flag actually
+/// changed. Only takes effect while `overlay_state` is `Active` — the flag is
+/// otherwise irrelevant (label mode never shows badges; `Hidden`/fading states
+/// have nothing to repaint).
+unsafe fn set_shift_badges_visible(visible: bool) {
+    let app_ptr = get_app_state();
+    if app_ptr.is_null() {
+        return;
+    }
+    let app = &mut *app_ptr;
+
+    if !should_update_shift_badges(&app.overlay_state, app.shift_badges_visible, visible) {
+        return;
+    }
+    app.shift_badges_visible = visible;
+
+    for &hwnd in &app.overlay_manager.overlay_hwnds {
+        let _ = InvalidateRect(hwnd, None, true);
+    }
+    if let Some(label_hwnd) = app.overlay_manager.label_hwnd {
+        let _ = InvalidateRect(label_hwnd, None, true);
+    }
+}
+
 unsafe fn handle_overlay_key(vk_code: u32) {
     let app_ptr = get_app_state();
     if app_ptr.is_null() {
@@ -938,6 +1123,7 @@ unsafe fn handle_overlay_key(vk_code: u32) {
         &app.window_snapshot,
         &mut app.session_tags,
         app.config.direct_switch,
+        app.overlay_manager.monitors.len(),
     );
 
     tracing::debug!("Key action: {:?}", action);
@@ -962,6 +1148,34 @@ unsafe fn handle_overlay_key(vk_code: u32) {
         }
         KeyAction::SwitchTo(target) => {
             // Both modes use the same hide mechanism
+            app.overlay_manager
+                .begin_hide(&mut app.overlay_state, Some(target));
+            app.previous_foreground = None;
+        }
+        KeyAction::MoveToMonitor {
+            hwnd: target,
+            monitor_index,
+        } => {
+            // Clone the MonitorInfo out first to avoid borrowing app.overlay_manager
+            // both immutably (for the move) and mutably (for begin_hide below).
+            if let Some(monitor) = app.overlay_manager.monitors.get(monitor_index).cloned() {
+                let moved = window_mover::move_to_monitor_center(target, &monitor);
+                if !moved {
+                    tracing::warn!(
+                        "MoveToMonitor: window {:?} was not confirmed centered on monitor {}",
+                        target,
+                        monitor_index
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    "MoveToMonitor: monitor_index {} out of range",
+                    monitor_index
+                );
+            }
+            // Same tail as SwitchTo — the overlay is topmost, so the reposition
+            // is invisible until the fade reveals the window. The switch itself
+            // happens inside handle_fade_timer once state leaves Active (see 7bb2660).
             app.overlay_manager
                 .begin_hide(&mut app.overlay_state, Some(target));
             app.previous_foreground = None;
@@ -1071,5 +1285,66 @@ unsafe fn handle_fade_timer(app: &mut AppState) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `should_update_shift_badges` is the one pure, Win32-free seam in this
+    // feature — everything else here is GDI paint calls and hook plumbing
+    // that require a live desktop to exercise (per the mission's validation
+    // note, manual verification is left to the user).
+
+    #[test]
+    fn shift_down_while_active_updates_when_flag_was_false() {
+        let state = OverlayState::Active { selected: None };
+        assert!(should_update_shift_badges(&state, false, true));
+    }
+
+    #[test]
+    fn shift_up_while_active_updates_when_flag_was_true() {
+        let state = OverlayState::Active { selected: Some(2) };
+        assert!(should_update_shift_badges(&state, true, false));
+    }
+
+    #[test]
+    fn repeated_shift_down_while_active_is_a_noop() {
+        // Auto-repeat keydowns report shift_down: true on every tick while
+        // Shift is held. Without this guard the overlay would repaint
+        // continuously for as long as the key stays down.
+        let state = OverlayState::Active { selected: None };
+        assert!(!should_update_shift_badges(&state, true, true));
+    }
+
+    #[test]
+    fn repeated_shift_up_while_active_is_a_noop() {
+        let state = OverlayState::Active { selected: None };
+        assert!(!should_update_shift_badges(&state, false, false));
+    }
+
+    #[test]
+    fn shift_transition_outside_active_state_is_ignored() {
+        // Label mode, Hidden, FadingIn, and FadingOut must never toggle the
+        // flag — badges only ever apply to the Active grid overlay.
+        assert!(!should_update_shift_badges(
+            &OverlayState::LabelMode { selected: None },
+            false,
+            true
+        ));
+        assert!(!should_update_shift_badges(&OverlayState::Hidden, false, true));
+        assert!(!should_update_shift_badges(
+            &OverlayState::FadingIn,
+            false,
+            true
+        ));
+        assert!(!should_update_shift_badges(
+            &OverlayState::FadingOut {
+                switch_target: None
+            },
+            false,
+            true
+        ));
     }
 }
