@@ -5,13 +5,13 @@
 ///
 /// The settings window is a top-level WS_OVERLAPPEDWINDOW (no resize, no maximize).
 /// It appears in the taskbar via WS_EX_APPWINDOW.
-use crate::config::{AppConfig, LabelOverlapStrategy};
+use crate::config::{ActionModifier, AppConfig, LabelOverlapStrategy};
 use crate::keycodes::{
-    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VK_CONTROL, VK_ESCAPE, VK_LCONTROL,
-    VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
-    WM_KEYDOWN_RAW, WM_SYSKEYDOWN_RAW,
+    is_digit, is_letter, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VK_CONTROL,
+    VK_ESCAPE, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU,
+    VK_RSHIFT, VK_RWIN, VK_SHIFT, WM_KEYDOWN_RAW, WM_SYSKEYDOWN_RAW,
 };
-use crate::settings_renderer::{ControlRects, DrawState, SettingsRenderer};
+use crate::settings_renderer::{ControlRects, DrawState, SettingsPage, SettingsRenderer};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -20,7 +20,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetSystemMetrics, PostMessageW,
+    AdjustWindowRectEx, CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    GetSystemMetrics, PostMessageW,
     RegisterClassExW, SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW,
     HC_ACTION, HHOOK, HMENU, KBDLLHOOKSTRUCT, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, WH_KEYBOARD_LL,
     WM_CLOSE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
@@ -44,9 +45,10 @@ impl Drop for HookGuard {
 }
 
 /// Fixed logical size of the settings window in physical pixels.
-/// Scaled by DPI at creation time.
-const SETTINGS_WIDTH_BASE: i32 = 480;
-const SETTINGS_HEIGHT_BASE: i32 = 680;
+/// Scaled by DPI at creation time. Kept in sync with `PANEL_WIDTH`/
+/// `PANEL_HEIGHT` in `settings_renderer.rs`.
+const SETTINGS_WIDTH_BASE: i32 = 620;
+const SETTINGS_HEIGHT_BASE: i32 = 560;
 
 /// Global pointer to the active SettingsPanelManager.
 /// Only valid while the settings panel is open (non-null).
@@ -62,7 +64,11 @@ fn get_settings_panel() -> *mut SettingsPanelManager {
 pub enum HotkeyRecorderState {
     /// Not recording.
     Idle,
-    /// Recording for the main overlay hotkey (target=1) or label hotkey (target=2).
+    /// Recording for the main overlay hotkey (target=1), label hotkey
+    /// (target=2), the in-overlay Confirm key (target=3), or the in-overlay
+    /// Dismiss key (target=4). Targets 1-2 are global hotkeys registered via
+    /// `RegisterHotKey`; targets 3-4 are handled entirely by the message pump
+    /// (`interaction.rs`) and never call `RegisterHotKey`.
     Recording {
         target: u8,
         previous_modifiers: u32,
@@ -89,6 +95,12 @@ pub struct SettingsPanelManager {
     main_hotkey_error: String,
     /// Pending error text for label hotkey field.
     label_hotkey_error: String,
+    /// Pending error text for the Confirm key field.
+    confirm_error: String,
+    /// Pending error text for the Dismiss key field.
+    dismiss_error: String,
+    /// Which settings page is currently showing.
+    current_page: SettingsPage,
     /// Cached direct_switch state for the toggle.
     direct_switch: bool,
     /// Cached launch_at_startup state for the toggle.
@@ -110,6 +122,9 @@ impl SettingsPanelManager {
             active_slider: None,
             main_hotkey_error: String::new(),
             label_hotkey_error: String::new(),
+            confirm_error: String::new(),
+            dismiss_error: String::new(),
+            current_page: SettingsPage::default(),
             direct_switch: false,
             launch_at_startup: false,
             label_overlap_strategy: LabelOverlapStrategy::AutoNudge,
@@ -117,17 +132,43 @@ impl SettingsPanelManager {
         }
     }
 
-    /// Open the settings panel. If already open, bring to front.
+    /// Open the settings panel on the Hotkeys page. If already open, bring to
+    /// front without changing whatever page is currently showing.
     pub fn open(&mut self, msg_hwnd: HWND) {
+        if self.hwnd.is_some() {
+            self.bring_to_front();
+            return;
+        }
+        self.current_page = SettingsPage::Keybindings;
+        self.open_internal(msg_hwnd);
+    }
+
+    /// Open the settings panel on a specific page (e.g. the tray's "Guide"
+    /// entry, or the first-run auto-open). If already open, bring to front
+    /// AND navigate to `page`.
+    pub fn open_on_page(&mut self, msg_hwnd: HWND, page: SettingsPage) {
+        self.current_page = page;
+        if self.hwnd.is_some() {
+            self.bring_to_front();
+            self.invalidate();
+            return;
+        }
+        self.open_internal(msg_hwnd);
+    }
+
+    /// Bring an already-open settings window to the foreground.
+    fn bring_to_front(&self) {
         if let Some(hwnd) = self.hwnd {
-            // Already open: bring to front
             unsafe {
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
             }
-            return;
         }
+    }
 
+    /// Shared window-creation path for `open`/`open_on_page`. `self.current_page`
+    /// must already be set by the caller.
+    fn open_internal(&mut self, msg_hwnd: HWND) {
         // Populate control state from AppState config
         self.populate_from_config();
 
@@ -167,16 +208,29 @@ impl SettingsPanelManager {
             let dpi = GetDpiForWindow(msg_hwnd);
             let dpi_scale = if dpi == 0 { 1.0_f32 } else { dpi as f32 / 96.0 };
 
-            let win_w = (SETTINGS_WIDTH_BASE as f32 * dpi_scale) as i32;
-            let win_h = (SETTINGS_HEIGHT_BASE as f32 * dpi_scale) as i32;
-            let win_x = (screen_w - win_w) / 2;
-            let win_y = (screen_h - win_h) / 2;
-
             let window_title: Vec<u16> = SETTINGS_WINDOW_TITLE.encode_utf16().collect();
 
             // WS_OVERLAPPEDWINDOW without WS_MAXIMIZEBOX and WS_THICKFRAME
             // = title bar, close button, minimize button, no resize/maximize
             let style = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+
+            // SETTINGS_WIDTH_BASE/HEIGHT_BASE describe the CLIENT area, because
+            // that is what the renderer draws into (`PANEL_WIDTH`/`PANEL_HEIGHT`).
+            // CreateWindowExW takes the *outer* size, so the caption and borders
+            // must be added on — passing the client size directly shrinks the
+            // usable area by the caption height and clips the footer button.
+            let mut wr = RECT {
+                left: 0,
+                top: 0,
+                right: (SETTINGS_WIDTH_BASE as f32 * dpi_scale) as i32,
+                bottom: (SETTINGS_HEIGHT_BASE as f32 * dpi_scale) as i32,
+            };
+            let _ = AdjustWindowRectEx(&mut wr, style, false, WS_EX_APPWINDOW);
+
+            let win_w = wr.right - wr.left;
+            let win_h = wr.bottom - wr.top;
+            let win_x = (screen_w - win_w) / 2;
+            let win_y = (screen_h - win_h) / 2;
 
             let hwnd = match CreateWindowExW(
                 WS_EX_APPWINDOW,
@@ -290,16 +344,23 @@ impl SettingsPanelManager {
         self.ll_hook = None;
     }
 
-    /// Build DrawState for the renderer from current panel state.
-    pub fn build_draw_state(&self) -> DrawState {
-        let recording_target = match &self.recorder {
+    /// Currently recording target: 0=none, 1=main, 2=label, 3=confirm, 4=dismiss.
+    fn recording_target(&self) -> u8 {
+        match &self.recorder {
             HotkeyRecorderState::Recording { target, .. } => *target,
             _ => 0,
-        };
+        }
+    }
+
+    /// Build DrawState for the renderer from current panel state.
+    pub fn build_draw_state(&self) -> DrawState {
         DrawState {
-            recording_target,
+            current_page: self.current_page,
+            recording_target: self.recording_target(),
             main_hotkey_error: self.main_hotkey_error.clone(),
             label_hotkey_error: self.label_hotkey_error.clone(),
+            confirm_error: self.confirm_error.clone(),
+            dismiss_error: self.dismiss_error.clone(),
             active_slider: self.active_slider,
             slider_values: self.slider_values,
             direct_switch: self.direct_switch,
@@ -314,6 +375,20 @@ impl SettingsPanelManager {
         let rects = self.control_rects.clone();
 
         unsafe {
+            // Sidebar navigation — checked first, and independent of which
+            // page is currently active (the rail is drawn on every page).
+            for (i, item) in rects.sidebar_items.iter().enumerate() {
+                if PtInRect(item, pt).as_bool() {
+                    if let Some(&page) = SettingsPage::ALL.get(i) {
+                        if page != self.current_page {
+                            self.current_page = page;
+                            self.invalidate();
+                        }
+                    }
+                    return;
+                }
+            }
+
             // Check main hotkey field
             if PtInRect(&rects.main_hotkey, pt).as_bool() {
                 self.start_recording(1);
@@ -324,6 +399,38 @@ impl SettingsPanelManager {
             if PtInRect(&rects.label_hotkey, pt).as_bool() {
                 self.start_recording(2);
                 return;
+            }
+
+            // Check Confirm key field
+            if PtInRect(&rects.confirm_hotkey, pt).as_bool() {
+                self.start_recording(3);
+                return;
+            }
+
+            // Check Dismiss key field
+            if PtInRect(&rects.dismiss_hotkey, pt).as_bool() {
+                self.start_recording(4);
+                return;
+            }
+
+            // Check tag-assign modifier buttons
+            for (i, r) in rects.tag_modifier_buttons.iter().enumerate() {
+                if PtInRect(r, pt).as_bool() {
+                    if let Some(&modifier) = ActionModifier::ALL.get(i) {
+                        self.set_tag_modifier(modifier);
+                    }
+                    return;
+                }
+            }
+
+            // Check move-to-monitor modifier buttons
+            for (i, r) in rects.move_modifier_buttons.iter().enumerate() {
+                if PtInRect(r, pt).as_bool() {
+                    if let Some(&modifier) = ActionModifier::ALL.get(i) {
+                        self.set_move_modifier(modifier);
+                    }
+                    return;
+                }
             }
 
             // Check direct_switch toggle
@@ -493,6 +600,47 @@ impl SettingsPanelManager {
         self.invalidate();
     }
 
+    /// Set the tag-assign modifier. Per spec, the tag-assign and
+    /// move-to-monitor modifiers must always differ: if the newly picked
+    /// modifier is currently in use by the move-to-monitor action, the two
+    /// are swapped instead of colliding.
+    fn set_tag_modifier(&mut self, modifier: ActionModifier) {
+        let app_ptr = crate::get_app_state_pub();
+        if app_ptr.is_null() {
+            return;
+        }
+        unsafe {
+            let app = &mut *app_ptr;
+            if modifier == app.config.move_modifier {
+                app.config.move_modifier = app.config.tag_modifier;
+            }
+            app.config.tag_modifier = modifier;
+            if let Err(e) = AppConfig::save(&app.config_dir, &app.config) {
+                tracing::error!("Failed to save config after tag modifier change: {}", e);
+            }
+        }
+        self.invalidate();
+    }
+
+    /// Set the move-to-monitor modifier. Mirrors `set_tag_modifier`'s swap rule.
+    fn set_move_modifier(&mut self, modifier: ActionModifier) {
+        let app_ptr = crate::get_app_state_pub();
+        if app_ptr.is_null() {
+            return;
+        }
+        unsafe {
+            let app = &mut *app_ptr;
+            if modifier == app.config.tag_modifier {
+                app.config.tag_modifier = app.config.move_modifier;
+            }
+            app.config.move_modifier = modifier;
+            if let Err(e) = AppConfig::save(&app.config_dir, &app.config) {
+                tracing::error!("Failed to save config after move modifier change: {}", e);
+            }
+        }
+        self.invalidate();
+    }
+
     /// Reset all settings to defaults and save.
     pub fn reset_to_defaults(&mut self) {
         let app_ptr = crate::get_app_state_pub();
@@ -527,6 +675,10 @@ impl SettingsPanelManager {
 
             app.config = defaults.clone();
             self.populate_from_config();
+            self.main_hotkey_error.clear();
+            self.label_hotkey_error.clear();
+            self.confirm_error.clear();
+            self.dismiss_error.clear();
 
             if let Err(e) = AppConfig::save(&app.config_dir, &app.config) {
                 tracing::error!("Failed to save default config: {}", e);
@@ -536,7 +688,8 @@ impl SettingsPanelManager {
         tracing::info!("Settings reset to defaults");
     }
 
-    /// Enter recording mode for a hotkey field.
+    /// Enter recording mode for a hotkey field. `target`: 1=main, 2=label,
+    /// 3=confirm, 4=dismiss.
     fn start_recording(&mut self, target: u8) {
         let app_ptr = crate::get_app_state_pub();
         if app_ptr.is_null() {
@@ -544,13 +697,14 @@ impl SettingsPanelManager {
         }
         let (prev_mod, prev_vk) = unsafe {
             let app = &*app_ptr;
-            if target == 1 {
-                (app.config.hotkey_modifiers, app.config.hotkey_vk)
-            } else {
-                (
+            match target {
+                1 => (app.config.hotkey_modifiers, app.config.hotkey_vk),
+                2 => (
                     app.config.label_hotkey_modifiers,
                     app.config.label_hotkey_vk,
-                )
+                ),
+                3 => (app.config.confirm_modifiers, app.config.confirm_vk),
+                _ => (app.config.dismiss_modifiers, app.config.dismiss_vk),
             }
         };
 
@@ -570,6 +724,26 @@ impl SettingsPanelManager {
         self.recorder = HotkeyRecorderState::Idle;
         self.invalidate();
         tracing::debug!("Hotkey recording cancelled");
+    }
+
+    /// Reject the in-progress Confirm/Dismiss recording (a bare letter or
+    /// digit was pressed — ambiguous with window-selection or tag-jump keys):
+    /// exit recording mode without touching the stored binding, and surface
+    /// an inline error on the field.
+    pub fn reject_recording(&mut self, error: String) {
+        let target = self.recording_target();
+        self.uninstall_ll_hook();
+        self.recorder = HotkeyRecorderState::Idle;
+        match target {
+            3 => self.confirm_error = error,
+            4 => self.dismiss_error = error,
+            _ => {}
+        }
+        self.invalidate();
+        tracing::debug!(
+            "Hotkey recording rejected for target={}: bare letter/digit",
+            target
+        );
     }
 
     /// Commit a captured hotkey combination.
@@ -593,73 +767,114 @@ impl SettingsPanelManager {
         unsafe {
             let app = &mut *app_ptr;
 
-            if target == 1 {
-                // Try to register the new main hotkey
-                crate::hotkey::unregister_hotkey(app.msg_hwnd);
-                match crate::hotkey::register_hotkey(app.msg_hwnd, modifiers, vk) {
-                    Ok(()) => {
-                        app.config.hotkey_modifiers = modifiers;
-                        app.config.hotkey_vk = vk;
-                        self.main_hotkey_error.clear();
-                        if let Err(e) = AppConfig::save(&app.config_dir, &app.config) {
-                            tracing::error!("Failed to save config after hotkey change: {}", e);
+            match target {
+                1 => {
+                    // Try to register the new main hotkey
+                    crate::hotkey::unregister_hotkey(app.msg_hwnd);
+                    match crate::hotkey::register_hotkey(app.msg_hwnd, modifiers, vk) {
+                        Ok(()) => {
+                            app.config.hotkey_modifiers = modifiers;
+                            app.config.hotkey_vk = vk;
+                            self.main_hotkey_error.clear();
+                            if let Err(e) = AppConfig::save(&app.config_dir, &app.config) {
+                                tracing::error!(
+                                    "Failed to save config after hotkey change: {}",
+                                    e
+                                );
+                            }
+                            tracing::info!(
+                                "Main hotkey changed to modifiers=0x{:X} vk=0x{:X}",
+                                modifiers,
+                                vk
+                            );
                         }
-                        tracing::info!(
-                            "Main hotkey changed to modifiers=0x{:X} vk=0x{:X}",
-                            modifiers,
-                            vk
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!("New main hotkey conflict: {:?}", e);
-                        self.main_hotkey_error = "Hotkey already in use".to_string();
-                        // Revert to previous hotkey
-                        if let Err(e2) =
-                            crate::hotkey::register_hotkey(app.msg_hwnd, prev_mod, prev_vk)
-                        {
-                            tracing::error!("Failed to re-register previous hotkey: {:?}", e2);
-                        } else {
-                            app.config.hotkey_modifiers = prev_mod;
-                            app.config.hotkey_vk = prev_vk;
+                        Err(e) => {
+                            tracing::warn!("New main hotkey conflict: {:?}", e);
+                            self.main_hotkey_error = "Hotkey already in use".to_string();
+                            // Revert to previous hotkey
+                            if let Err(e2) =
+                                crate::hotkey::register_hotkey(app.msg_hwnd, prev_mod, prev_vk)
+                            {
+                                tracing::error!("Failed to re-register previous hotkey: {:?}", e2);
+                            } else {
+                                app.config.hotkey_modifiers = prev_mod;
+                                app.config.hotkey_vk = prev_vk;
+                            }
                         }
                     }
                 }
-            } else {
-                // Label hotkey
-                crate::hotkey::unregister_label_hotkey(app.msg_hwnd);
-                match crate::hotkey::register_label_hotkey(app.msg_hwnd, modifiers, vk) {
-                    Ok(()) => {
-                        app.config.label_hotkey_modifiers = modifiers;
-                        app.config.label_hotkey_vk = vk;
-                        self.label_hotkey_error.clear();
-                        if let Err(e) = AppConfig::save(&app.config_dir, &app.config) {
-                            tracing::error!(
-                                "Failed to save config after label hotkey change: {}",
-                                e
+                2 => {
+                    // Label hotkey
+                    crate::hotkey::unregister_label_hotkey(app.msg_hwnd);
+                    match crate::hotkey::register_label_hotkey(app.msg_hwnd, modifiers, vk) {
+                        Ok(()) => {
+                            app.config.label_hotkey_modifiers = modifiers;
+                            app.config.label_hotkey_vk = vk;
+                            self.label_hotkey_error.clear();
+                            if let Err(e) = AppConfig::save(&app.config_dir, &app.config) {
+                                tracing::error!(
+                                    "Failed to save config after label hotkey change: {}",
+                                    e
+                                );
+                            }
+                            tracing::info!(
+                                "Label hotkey changed to modifiers=0x{:X} vk=0x{:X}",
+                                modifiers,
+                                vk
                             );
                         }
-                        tracing::info!(
-                            "Label hotkey changed to modifiers=0x{:X} vk=0x{:X}",
-                            modifiers,
-                            vk
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!("New label hotkey conflict: {:?}", e);
-                        self.label_hotkey_error = "Hotkey already in use".to_string();
-                        // Revert
-                        if let Err(e2) =
-                            crate::hotkey::register_label_hotkey(app.msg_hwnd, prev_mod, prev_vk)
-                        {
-                            tracing::error!(
-                                "Failed to re-register previous label hotkey: {:?}",
-                                e2
-                            );
-                        } else {
-                            app.config.label_hotkey_modifiers = prev_mod;
-                            app.config.label_hotkey_vk = prev_vk;
+                        Err(e) => {
+                            tracing::warn!("New label hotkey conflict: {:?}", e);
+                            self.label_hotkey_error = "Hotkey already in use".to_string();
+                            // Revert
+                            if let Err(e2) = crate::hotkey::register_label_hotkey(
+                                app.msg_hwnd,
+                                prev_mod,
+                                prev_vk,
+                            ) {
+                                tracing::error!(
+                                    "Failed to re-register previous label hotkey: {:?}",
+                                    e2
+                                );
+                            } else {
+                                app.config.label_hotkey_modifiers = prev_mod;
+                                app.config.label_hotkey_vk = prev_vk;
+                            }
                         }
                     }
+                }
+                3 => {
+                    // Confirm — an in-overlay key handled by the message pump
+                    // (interaction.rs), not a global hotkey. No RegisterHotKey
+                    // call, so no conflict/revert path either. MOD_NOREPEAT is
+                    // stripped since it is meaningless outside RegisterHotKey
+                    // and must not leak into the bitmask compared against
+                    // physically-held modifiers in `interaction::held_mod_flags`.
+                    app.config.confirm_modifiers = modifiers & !MOD_NOREPEAT;
+                    app.config.confirm_vk = vk;
+                    self.confirm_error.clear();
+                    if let Err(e) = AppConfig::save(&app.config_dir, &app.config) {
+                        tracing::error!("Failed to save config after confirm key change: {}", e);
+                    }
+                    tracing::info!(
+                        "Confirm key changed to modifiers=0x{:X} vk=0x{:X}",
+                        app.config.confirm_modifiers,
+                        vk
+                    );
+                }
+                _ => {
+                    // Dismiss — same as Confirm: in-overlay only, no RegisterHotKey.
+                    app.config.dismiss_modifiers = modifiers & !MOD_NOREPEAT;
+                    app.config.dismiss_vk = vk;
+                    self.dismiss_error.clear();
+                    if let Err(e) = AppConfig::save(&app.config_dir, &app.config) {
+                        tracing::error!("Failed to save config after dismiss key change: {}", e);
+                    }
+                    tracing::info!(
+                        "Dismiss key changed to modifiers=0x{:X} vk=0x{:X}",
+                        app.config.dismiss_modifiers,
+                        vk
+                    );
                 }
             }
         }
@@ -742,18 +957,53 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
         modifiers |= MOD_WIN;
     }
 
-    // Must have at least one modifier besides MOD_NOREPEAT
-    let has_modifier = (modifiers & !0x4000) != 0;
-    if !has_modifier {
-        // Single key without modifier — not a valid hotkey combination
+    let panel_ptr = get_settings_panel();
+    if panel_ptr.is_null() {
+        return CallNextHookEx(HHOOK::default(), code, wparam, lparam);
+    }
+    let target = (*panel_ptr).recording_target();
+    let has_modifier = (modifiers & !MOD_NOREPEAT) != 0;
+
+    if target == 1 || target == 2 {
+        // Global hotkeys (main overlay / label mode): require at least one
+        // real modifier besides MOD_NOREPEAT, exactly as before.
+        if !has_modifier {
+            // Single key without modifier — not a valid hotkey combination.
+            // Keep recording; do not commit or reject.
+            return CallNextHookEx(HHOOK::default(), code, wparam, lparam);
+        }
+    } else if target == 3 || target == 4 {
+        // Confirm/Dismiss: the rule is inverted from global hotkeys. A bare
+        // (unmodified) letter is rejected outright — it would be ambiguous
+        // with window-selection (a-z) keys — but a bare non-alphanumeric
+        // (Tab, F4, Backspace, ...) is accepted, and a modifier-qualified
+        // letter (Ctrl+J, etc.) is accepted.
+        //
+        // Digits 1-9 are rejected UNCONDITIONALLY, modifiers or not: they are
+        // fully claimed by tag-assign, tag-jump, and monitor-move, so e.g. a
+        // Ctrl+3 Confirm binding would have `has_modifier == true` and pass
+        // the bare-key check below, yet at overlay runtime the digit branch
+        // in `interaction.rs` returns before the Confirm/Dismiss check ever
+        // runs — Ctrl+3 always assigns tag 3, never confirms. Rather than
+        // reordering the runtime branches (which would risk the tag-assign/
+        // move-to-monitor paths), the recorder simply never lets a digit
+        // become a Confirm/Dismiss binding in the first place.
+        if is_digit(vk) {
+            (*panel_ptr).reject_recording("Digits are reserved for tags".to_string());
+            return LRESULT(1); // swallow the rejected key
+        }
+        if !has_modifier && is_letter(vk) {
+            (*panel_ptr).reject_recording("Letters need a modifier".to_string());
+            return LRESULT(1); // swallow the rejected key
+        }
+    } else {
+        // No active recording — the hook should not be installed in this
+        // state, but bail out defensively rather than commit anywhere.
         return CallNextHookEx(HHOOK::default(), code, wparam, lparam);
     }
 
     // Commit the hotkey
-    let panel_ptr = get_settings_panel();
-    if !panel_ptr.is_null() {
-        (*panel_ptr).commit_hotkey(modifiers, vk);
-    }
+    (*panel_ptr).commit_hotkey(modifiers, vk);
 
     LRESULT(1) // swallow the key
 }
@@ -1035,5 +1285,117 @@ mod tests {
         let conflict = config.hotkey_vk == config.label_hotkey_vk
             && config.hotkey_modifiers == config.label_hotkey_modifiers;
         assert!(!conflict, "Different vk+mods combos should not conflict");
+    }
+
+    // --- Configurable keybindings (Stage 4/5) ---
+
+    // Manager opens on the Keybindings page by default, with no pending
+    // Confirm/Dismiss errors. (Global hotkeys and in-overlay keys were
+    // originally separate pages; they are now two sections of this one.)
+    #[test]
+    fn test_new_manager_defaults_to_keybindings_page() {
+        let manager = SettingsPanelManager::new();
+        assert_eq!(
+            manager.current_page,
+            crate::settings_renderer::SettingsPage::Keybindings
+        );
+        assert_eq!(manager.recording_target(), 0);
+        assert!(manager.confirm_error.is_empty());
+        assert!(manager.dismiss_error.is_empty());
+    }
+
+    // Plan step 20: replicates `ll_keyboard_proc`'s target-aware bare-key rule
+    // as a pure test (the hook itself needs a live low-level hook to exercise).
+    // Targets 3/4 (Confirm/Dismiss) reject a bare letter/digit but accept a
+    // bare non-alphanumeric or any modifier-qualified key.
+    #[test]
+    fn test_confirm_dismiss_bare_key_rule() {
+        use crate::keycodes::{is_digit, is_letter, VK_F4, VK_J, VK_TAB, VK_3, VK_5};
+        // Mirrors the exact rule in `ll_keyboard_proc`: digits are rejected
+        // unconditionally (they're fully claimed by tag-assign/tag-jump/
+        // move-to-monitor, and a digit binding can never fire at runtime —
+        // see the Hermes-BLOCKER fix), a bare letter is rejected, and
+        // everything else (modifier-qualified letters, bare non-alnum keys)
+        // is accepted.
+        let allowed =
+            |has_modifier: bool, vk: u32| !is_digit(vk) && (has_modifier || !is_letter(vk));
+
+        assert!(!allowed(false, VK_J), "bare letter must be rejected");
+        assert!(!allowed(false, VK_5), "bare digit must be rejected");
+        assert!(
+            !allowed(true, VK_3),
+            "modifier-qualified digit (e.g. Ctrl+3) must ALSO be rejected — \
+             digits can never reach the Confirm/Dismiss check at runtime"
+        );
+        assert!(
+            allowed(true, VK_J),
+            "Ctrl+J (modifier-qualified letter) must be accepted"
+        );
+        assert!(allowed(false, VK_TAB), "bare Tab must be accepted");
+        assert!(allowed(false, VK_F4), "bare F4 must be accepted");
+    }
+
+    // Plan step 22: picking a modifier already in use by the other action
+    // swaps the two rather than colliding.
+    #[test]
+    fn test_action_modifier_swap_on_collision() {
+        let mut tag = ActionModifier::Ctrl;
+        let mut mv = ActionModifier::Shift;
+
+        // User sets tag_modifier to Shift, which move_modifier already owns.
+        let picked = ActionModifier::Shift;
+        if picked == mv {
+            mv = tag;
+        }
+        tag = picked;
+
+        assert_eq!(tag, ActionModifier::Shift);
+        assert_eq!(mv, ActionModifier::Ctrl);
+    }
+
+    // No-collision case: picking a modifier neither action currently uses
+    // just assigns it, leaving the other action untouched.
+    #[test]
+    fn test_action_modifier_no_swap_when_distinct() {
+        let mut tag = ActionModifier::Ctrl;
+        let mv = ActionModifier::Shift;
+
+        let picked = ActionModifier::Alt;
+        if picked != mv {
+            tag = picked;
+        }
+
+        assert_eq!(tag, ActionModifier::Alt);
+        assert_eq!(mv, ActionModifier::Shift);
+    }
+
+    // `ActionModifier::ALL` / `SettingsPage::ALL` are the single source of
+    // truth for button/sidebar rect ordering — pin their order so a reorder
+    // is a deliberate, visible test change rather than a silent UI shuffle.
+    #[test]
+    fn test_action_modifier_all_order() {
+        assert_eq!(
+            ActionModifier::ALL,
+            [
+                ActionModifier::Ctrl,
+                ActionModifier::Alt,
+                ActionModifier::Shift,
+                ActionModifier::Win,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_settings_page_all_order() {
+        use crate::settings_renderer::SettingsPage;
+        assert_eq!(
+            SettingsPage::ALL,
+            [
+                SettingsPage::Keybindings,
+                SettingsPage::Behavior,
+                SettingsPage::Appearance,
+                SettingsPage::Guide,
+            ]
+        );
     }
 }

@@ -10,7 +10,7 @@
 /// SetWindowsHookExW) because WH_KEYBOARD_LL callbacks are always dispatched on
 /// the installing thread's message loop. We therefore access APP_STATE_PTR with
 /// the same Relaxed ordering used everywhere else in the codebase.
-use crate::keycodes::{VK_LSHIFT, VK_RSHIFT, VK_SHIFT};
+use crate::keycodes::is_modifier_only;
 use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -32,18 +32,22 @@ pub type KeyHandler = fn(vk_code: u32) -> bool;
 /// Global key handler fn pointer (set once before hook is installed).
 static KEY_HANDLER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// A callback type that reports Shift key transitions while the overlay is
-/// active. `shift_down` is `true` on WM_KEYDOWN/WM_SYSKEYDOWN for a Shift
-/// virtual key, `false` on WM_KEYUP/WM_SYSKEYUP. Unlike `KeyHandler`, the
-/// return value here does not affect swallow behavior — key-up events are
-/// never swallowed regardless of what this callback does.
-pub type ModifierHandler = fn(shift_down: bool);
+/// A callback type that reports modifier-key transitions while the overlay is
+/// active. Called for ANY modifier key (Shift, Ctrl, Alt, or Win — generic or
+/// side-specific), so the consumer can filter for whichever modifier is
+/// currently configured as the move-to-monitor action modifier. `vk` is the
+/// raw (possibly side-specific) virtual-key code reported by the low-level
+/// hook; `is_down` is `true` on WM_KEYDOWN/WM_SYSKEYDOWN, `false` on
+/// WM_KEYUP/WM_SYSKEYUP. Unlike `KeyHandler`, the return value here does not
+/// affect swallow behavior — key-up events are never swallowed regardless of
+/// what this callback does.
+pub type ModifierHandler = fn(vk: u32, is_down: bool);
 
 /// Global modifier handler fn pointer (set once before hook is installed).
 static MODIFIER_HANDLER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// Install the callback invoked on Shift press/release while the overlay is
-/// active. Must be called from the message pump thread, same as `install`.
+/// Install the callback invoked on any modifier-key press/release while the
+/// overlay is active. Must be called from the message pump thread, same as `install`.
 pub fn install_modifier_handler(handler: ModifierHandler) {
     MODIFIER_HANDLER.store(handler as usize, Ordering::Relaxed);
 }
@@ -127,17 +131,19 @@ unsafe extern "system" fn ll_keyboard_proc(
         let kbd = &*(l_param.0 as *const KBDLLHOOKSTRUCT);
         let vk = kbd.vkCode;
 
-        // Shift press/release is reported to a separate modifier callback so the
-        // overlay can toggle monitor-badge visibility while Shift is held. This
+        // Any modifier key's press/release is reported to a separate modifier
+        // callback so the overlay can toggle monitor-badge visibility while the
+        // *configured* move-to-monitor modifier is held (Ctrl/Alt/Shift/Win —
+        // the consumer filters by which one is currently configured). This
         // check runs for BOTH keydown and keyup — but keyup is never swallowed
-        // below (only the `is_keydown` branch can return LRESULT(1)), so Shift
-        // release always reaches CallNextHookEx and can never get "stuck down"
-        // in whatever application regains focus.
-        if vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT {
+        // below (only the `is_keydown` branch can return LRESULT(1)), so a
+        // modifier release always reaches CallNextHookEx and can never get
+        // "stuck down" in whatever application regains focus.
+        if is_modifier_only(vk) {
             let modifier_ptr = MODIFIER_HANDLER.load(Ordering::Relaxed);
             if modifier_ptr != 0 {
                 let handler: ModifierHandler = std::mem::transmute(modifier_ptr);
-                handler(is_keydown);
+                handler(vk, is_keydown);
             }
         }
 

@@ -18,6 +18,8 @@ pub const MENU_SETTINGS: u32 = 2001;
 pub const MENU_ABOUT: u32 = 2002;
 pub const MENU_EXIT: u32 = 2003;
 pub const MENU_DIRECT_SWITCH: u32 = 2004;
+/// Opens the settings window directly on the Guide page.
+pub const MENU_GUIDE: u32 = 2005;
 
 /// Tray icon ID.
 const TRAY_ICON_ID: u32 = 1;
@@ -130,10 +132,17 @@ pub fn show_context_menu(hwnd: HWND, direct_switch: bool) -> u32 {
         );
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
+        let guide_w: Vec<u16> = "Guide\0".encode_utf16().collect();
         let settings_w: Vec<u16> = "Settings...\0".encode_utf16().collect();
         let about_w: Vec<u16> = "About\0".encode_utf16().collect();
         let exit_w: Vec<u16> = "Exit\0".encode_utf16().collect();
 
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            MENU_GUIDE as usize,
+            PCWSTR(guide_w.as_ptr()),
+        );
         let _ = AppendMenuW(
             menu,
             MF_STRING,

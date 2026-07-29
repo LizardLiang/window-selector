@@ -2,7 +2,7 @@
 ///
 /// All drawing is done via Direct2D + DirectWrite, following the same pattern
 /// as `overlay_renderer.rs`. No Win32 GDI controls are used.
-use crate::config::{AppConfig, LabelOverlapStrategy};
+use crate::config::{ActionModifier, AppConfig, LabelOverlapStrategy};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
@@ -22,15 +22,63 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
+/// Fixed logical panel dimensions (in the same units as `SETTINGS_WIDTH_BASE`/
+/// `SETTINGS_HEIGHT_BASE` in `settings_panel.rs` — kept in sync with those).
+const PANEL_WIDTH: f32 = 620.0;
+const PANEL_HEIGHT: f32 = 560.0;
+/// Width of the left navigation rail. All page content starts at
+/// `SIDEBAR_WIDTH + margin`.
+const SIDEBAR_WIDTH: f32 = 140.0;
+
+/// Which page of the settings window is currently active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsPage {
+    /// Global hotkeys and in-overlay keys — one page, two sections. They were
+    /// split at first; keeping them together is what users expect, since both
+    /// answer "what key does what".
+    #[default]
+    Keybindings,
+    Behavior,
+    Appearance,
+    Guide,
+}
+
+impl SettingsPage {
+    /// All pages in sidebar display order. Single source of truth for both
+    /// the sidebar's rendering order and `ControlRects::sidebar_items`' index.
+    pub const ALL: [SettingsPage; 4] = [
+        SettingsPage::Keybindings,
+        SettingsPage::Behavior,
+        SettingsPage::Appearance,
+        SettingsPage::Guide,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SettingsPage::Keybindings => "Keybindings",
+            SettingsPage::Behavior => "Behavior",
+            SettingsPage::Appearance => "Appearance",
+            SettingsPage::Guide => "Guide",
+        }
+    }
+}
+
 /// State passed from the panel manager to the renderer each frame.
 #[derive(Debug, Clone)]
 pub struct DrawState {
-    /// Which hotkey field is in recording mode (0=none, 1=main, 2=label)
+    /// Which page is currently active.
+    pub current_page: SettingsPage,
+    /// Which hotkey field is in recording mode
+    /// (0=none, 1=main, 2=label, 3=confirm, 4=dismiss)
     pub recording_target: u8,
     /// Error message for hotkey field 1 (main), or empty
     pub main_hotkey_error: String,
     /// Error message for hotkey field 2 (label), or empty
     pub label_hotkey_error: String,
+    /// Error message for the Confirm key field, or empty
+    pub confirm_error: String,
+    /// Error message for the Dismiss key field, or empty
+    pub dismiss_error: String,
     /// Index of slider being dragged (0-based), or None
     pub active_slider: Option<usize>,
     /// Slider values [overlay_opacity(0-255), background_opacity(0.0-1.0),
@@ -42,15 +90,31 @@ pub struct DrawState {
 }
 
 /// Hit-test rectangles for all controls — populated during draw, used for mouse events.
+///
+/// Only the rects belonging to the currently active page are populated by
+/// `draw_panel`; every other field is left at `RECT::default()` (all zeros),
+/// which makes `PtInRect` return false for it. That is the entire mechanism
+/// that prevents a click at a position where, say, an Appearance slider used
+/// to be from doing anything while a different page is showing.
 #[derive(Debug, Clone, Default)]
 pub struct ControlRects {
+    /// The 5 sidebar navigation entries, in `SettingsPage::ALL` order. Always
+    /// populated regardless of the active page.
+    pub sidebar_items: [RECT; 4],
     pub main_hotkey: RECT,
     pub label_hotkey: RECT,
+    pub confirm_hotkey: RECT,
+    pub dismiss_hotkey: RECT,
+    /// Tag-assign modifier option buttons, in `ActionModifier::ALL` order.
+    pub tag_modifier_buttons: [RECT; 4],
+    /// Move-to-monitor modifier option buttons, in `ActionModifier::ALL` order.
+    pub move_modifier_buttons: [RECT; 4],
     pub direct_switch_toggle: RECT,
     pub launch_at_startup_toggle: RECT,
     /// Track rects for the 6 sliders (overlay_opacity, background_opacity,
     /// fade_duration_ms, grid_padding, label_font_size, title_font_size)
     pub slider_tracks: [RECT; 6],
+    /// Reset to Defaults — drawn in the footer strip, visible on every page.
     pub reset_button: RECT,
     /// Label overlap strategy: AutoNudge button rect
     pub label_overlap_nudge: RECT,
@@ -68,6 +132,24 @@ fn d2d_rect(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
         top,
         right,
         bottom,
+    }
+}
+
+/// Render a Confirm/Dismiss binding for display, appending the permanent
+/// fallback key only when it differs from the configured binding — otherwise
+/// the default Escape dismiss renders as the nonsense "Esc (or Esc)".
+/// `bracketed` parenthesizes the suffix for the compact settings field; the
+/// Guide page passes it through unbracketed.
+fn binding_with_fallback(modifiers: u32, vk: u32, fallback_vk: u32, bracketed: bool) -> String {
+    let name = crate::hotkey::format_hotkey(modifiers, vk);
+    if vk == fallback_vk && modifiers == 0 {
+        return name;
+    }
+    let fallback = crate::hotkey::format_hotkey(0, fallback_vk);
+    if bracketed {
+        format!("{} (or {})", name, fallback)
+    } else {
+        format!("{} or {}", name, fallback)
     }
 }
 
@@ -273,6 +355,12 @@ impl SettingsRenderer {
     }
 
     /// Render the complete settings panel. Returns updated control hit-test rects.
+    ///
+    /// Only the active page's `draw_*_page` method is called, and it is the
+    /// only one that populates its slice of `rects` — every field belonging
+    /// to another page is left at `RECT::default()`, so `PtInRect` fails for
+    /// it and a click there is a no-op. The sidebar and the footer Reset
+    /// button are drawn unconditionally on every page.
     pub fn draw_panel(&self, config: &AppConfig, state: &DrawState) -> ControlRects {
         let mut rects = ControlRects::default();
         unsafe {
@@ -280,245 +368,34 @@ impl SettingsRenderer {
             self.render_target
                 .Clear(Some(&d2d_color(0.08, 0.09, 0.13, 1.0)));
 
-            let left_margin = 24.0_f32;
+            rects.sidebar_items = self.draw_sidebar(state.current_page);
+
+            let content_left = SIDEBAR_WIDTH + 24.0_f32;
             let right_margin = 24.0_f32;
-            let panel_width = 480.0_f32;
-            let label_col_width = 180.0_f32;
-            let control_left = left_margin + label_col_width;
-            let control_right = panel_width - right_margin;
+            let content_right = PANEL_WIDTH - right_margin;
 
-            // Helper: draw a section heading + separator line
-            let draw_section = |y: f32, title: &str| {
-                let t: Vec<u16> = title.encode_utf16().collect();
-                self.render_target.DrawText(
-                    &t,
-                    &self.heading_format,
-                    &d2d_rect(left_margin, y, panel_width - right_margin, y + 24.0),
-                    &self.section_heading_brush,
-                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                    windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
-                );
-                self.render_target.DrawLine(
-                    D2D_POINT_2F {
-                        x: left_margin,
-                        y: y + 26.0,
-                    },
-                    D2D_POINT_2F {
-                        x: panel_width - right_margin,
-                        y: y + 26.0,
-                    },
-                    &self.separator_brush,
-                    1.0,
-                    None,
-                );
-            };
-
-            // Helper: draw a row label
-            let draw_label = |y: f32, text: &str| {
-                let t: Vec<u16> = text.encode_utf16().collect();
-                self.render_target.DrawText(
-                    &t,
-                    &self.label_format,
-                    &d2d_rect(left_margin, y, left_margin + label_col_width, y + 30.0),
-                    &self.label_brush,
-                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                    windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
-                );
-            };
-
-            // ---- HOTKEYS SECTION ----
-            let hk_y = 20.0_f32;
-            draw_section(hk_y, "HOTKEYS");
-
-            // Main hotkey field (y=50)
-            let mhk_y = 50.0_f32;
-            draw_label(mhk_y + 4.0, "Main Overlay");
-            let mhk_rect = RECT {
-                left: control_left as i32,
-                top: mhk_y as i32,
-                right: control_right as i32,
-                bottom: (mhk_y + 30.0) as i32,
-            };
-            rects.main_hotkey = mhk_rect;
-            let mhk_text_owned;
-            let mhk_text: &str = if state.recording_target == 1 {
-                "Press a key combination..."
-            } else if !state.main_hotkey_error.is_empty() {
-                &state.main_hotkey_error
-            } else {
-                mhk_text_owned =
-                    crate::hotkey::format_hotkey(config.hotkey_modifiers, config.hotkey_vk);
-                &mhk_text_owned
-            };
-            self.draw_hotkey_field(
-                &mhk_rect,
-                mhk_text,
-                state.recording_target == 1,
-                !state.main_hotkey_error.is_empty(),
-            );
-
-            // Label hotkey field (y=90)
-            let lhk_y = 90.0_f32;
-            draw_label(lhk_y + 4.0, "Label Mode");
-            let lhk_rect = RECT {
-                left: control_left as i32,
-                top: lhk_y as i32,
-                right: control_right as i32,
-                bottom: (lhk_y + 30.0) as i32,
-            };
-            rects.label_hotkey = lhk_rect;
-            let lhk_text_owned;
-            let lhk_text: &str = if state.recording_target == 2 {
-                "Press a key combination..."
-            } else if !state.label_hotkey_error.is_empty() {
-                &state.label_hotkey_error
-            } else {
-                lhk_text_owned = crate::hotkey::format_hotkey(
-                    config.label_hotkey_modifiers,
-                    config.label_hotkey_vk,
-                );
-                &lhk_text_owned
-            };
-            self.draw_hotkey_field(
-                &lhk_rect,
-                lhk_text,
-                state.recording_target == 2,
-                !state.label_hotkey_error.is_empty(),
-            );
-
-            // ---- BEHAVIOR SECTION ----
-            let beh_y = 140.0_f32;
-            draw_section(beh_y, "BEHAVIOR");
-
-            // Direct switch toggle (y=170)
-            let ds_y = 170.0_f32;
-            draw_label(ds_y + 5.0, "Direct switch");
-            let ds_rect = RECT {
-                left: (control_right - 60.0) as i32,
-                top: ds_y as i32,
-                right: control_right as i32,
-                bottom: (ds_y + 24.0) as i32,
-            };
-            rects.direct_switch_toggle = ds_rect;
-            self.draw_toggle(&ds_rect, state.direct_switch);
-
-            // Launch at startup toggle (y=210)
-            let las_y = 210.0_f32;
-            draw_label(las_y + 5.0, "Launch at startup");
-            let las_rect = RECT {
-                left: (control_right - 60.0) as i32,
-                top: las_y as i32,
-                right: control_right as i32,
-                bottom: (las_y + 24.0) as i32,
-            };
-            rects.launch_at_startup_toggle = las_rect;
-            self.draw_toggle(&las_rect, state.launch_at_startup);
-
-            // ---- LABEL MODE SECTION ----
-            let lm_y = 250.0_f32;
-            draw_section(lm_y, "LABEL MODE");
-
-            // Label overlap strategy: AutoNudge (y=280)
-            let lon_y = 280.0_f32;
-            draw_label(lon_y + 5.0, "Label overlap");
-            let opt_w = 130.0_f32;
-            let opt_h = 28.0_f32;
-            let opt_gap = 8.0_f32;
-            let opt_start_x = control_right - opt_w * 2.0 - opt_gap;
-            let nudge_rect = RECT {
-                left: opt_start_x as i32,
-                top: lon_y as i32,
-                right: (opt_start_x + opt_w) as i32,
-                bottom: (lon_y + opt_h) as i32,
-            };
-            rects.label_overlap_nudge = nudge_rect;
-            self.draw_option_button(
-                &nudge_rect,
-                "Auto nudge",
-                state.label_overlap_strategy == LabelOverlapStrategy::AutoNudge,
-            );
-
-            // Label overlap strategy: VisibleRegion (y=280, to the right)
-            let visible_rect = RECT {
-                left: (opt_start_x + opt_w + opt_gap) as i32,
-                top: lon_y as i32,
-                right: (opt_start_x + opt_w * 2.0 + opt_gap) as i32,
-                bottom: (lon_y + opt_h) as i32,
-            };
-            rects.label_overlap_visible = visible_rect;
-            self.draw_option_button(
-                &visible_rect,
-                "Visible region",
-                state.label_overlap_strategy == LabelOverlapStrategy::VisibleRegion,
-            );
-
-            // ---- APPEARANCE SECTION ----
-            let app_y = 330.0_f32;
-            draw_section(app_y, "APPEARANCE");
-
-            // Sliders: overlay_opacity, background_opacity, fade_duration_ms,
-            //          grid_padding, label_font_size, title_font_size
-            let slider_configs: [(&str, f32, f32, &str); 6] = [
-                ("Overlay opacity", 50.0, 255.0, ""),
-                ("Background opacity", 0.0, 1.0, ""),
-                ("Fade duration", 0.0, 500.0, " ms"),
-                ("Grid padding", 4.0, 48.0, " px"),
-                ("Label font size", 10.0, 32.0, " px"),
-                ("Title font size", 8.0, 24.0, " px"),
-            ];
-
-            let slider_base_y = 360.0_f32;
-            let slider_row_h = 40.0_f32;
-            let slider_left = control_left;
-            let slider_right = control_right - 55.0; // leave room for value text
-
-            for (i, (label, _min_val, _max_val, suffix)) in slider_configs.iter().enumerate() {
-                let sy = slider_base_y + i as f32 * slider_row_h;
-                draw_label(sy + 8.0, label);
-
-                let track_rect = RECT {
-                    left: slider_left as i32,
-                    top: (sy + 12.0) as i32,
-                    right: slider_right as i32,
-                    bottom: (sy + 18.0) as i32,
-                };
-                rects.slider_tracks[i] = track_rect;
-
-                let raw_val = state.slider_values[i];
-                let t_min = slider_configs[i].1;
-                let t_max = slider_configs[i].2;
-                self.draw_slider(
-                    &track_rect,
-                    raw_val,
-                    t_min,
-                    t_max,
-                    state.active_slider == Some(i),
-                );
-
-                // Value label
-                let val_text = if i == 0 {
-                    format!("{}{}", raw_val as u32, suffix)
-                } else if i == 1 {
-                    format!("{:.2}{}", raw_val, suffix)
-                } else {
-                    format!("{:.0}{}", raw_val, suffix)
-                };
-                let vt: Vec<u16> = val_text.encode_utf16().collect();
-                self.render_target.DrawText(
-                    &vt,
-                    &self.value_format,
-                    &d2d_rect(slider_right + 4.0, sy + 8.0, control_right + 8.0, sy + 28.0),
-                    &self.value_brush,
-                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                    windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
-                );
+            match state.current_page {
+                SettingsPage::Keybindings => self.draw_keybindings_page(
+                    config,
+                    state,
+                    content_left,
+                    content_right,
+                    &mut rects,
+                ),
+                SettingsPage::Behavior => {
+                    self.draw_behavior_page(state, content_left, content_right, &mut rects)
+                }
+                SettingsPage::Appearance => {
+                    self.draw_appearance_page(state, content_left, content_right, &mut rects)
+                }
+                SettingsPage::Guide => self.draw_guide_page(config, content_left, content_right),
             }
 
-            // ---- RESET BUTTON ----
-            let btn_y = 610.0_f32;
+            // ---- FOOTER: Reset to Defaults (every page) ----
+            let btn_y = PANEL_HEIGHT - 60.0_f32;
             let btn_w = 200.0_f32;
             let btn_h = 36.0_f32;
-            let btn_x = (panel_width - btn_w) / 2.0;
+            let btn_x = SIDEBAR_WIDTH + (PANEL_WIDTH - SIDEBAR_WIDTH - btn_w) / 2.0;
             let btn_rect = RECT {
                 left: btn_x as i32,
                 top: btn_y as i32,
@@ -533,6 +410,536 @@ impl SettingsRenderer {
             }
         }
         rects
+    }
+
+    /// Draw a section heading + separator line spanning `[x_left, x_right]`.
+    fn draw_section(&self, x_left: f32, x_right: f32, y: f32, title: &str) {
+        unsafe {
+            let t: Vec<u16> = title.encode_utf16().collect();
+            self.render_target.DrawText(
+                &t,
+                &self.heading_format,
+                &d2d_rect(x_left, y, x_right, y + 24.0),
+                &self.section_heading_brush,
+                D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
+            );
+            self.render_target.DrawLine(
+                D2D_POINT_2F {
+                    x: x_left,
+                    y: y + 26.0,
+                },
+                D2D_POINT_2F {
+                    x: x_right,
+                    y: y + 26.0,
+                },
+                &self.separator_brush,
+                1.0,
+                None,
+            );
+        }
+    }
+
+    /// Draw a row label of `width` starting at `x_left`.
+    fn draw_label(&self, x_left: f32, width: f32, y: f32, text: &str) {
+        unsafe {
+            let t: Vec<u16> = text.encode_utf16().collect();
+            self.render_target.DrawText(
+                &t,
+                &self.label_format,
+                &d2d_rect(x_left, y, x_left + width, y + 30.0),
+                &self.label_brush,
+                D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
+            );
+        }
+    }
+
+    /// Draw the left navigation rail (always visible) and return its 5 hit-test
+    /// rects in `SettingsPage::ALL` order.
+    fn draw_sidebar(&self, active: SettingsPage) -> [RECT; 4] {
+        let mut rects = [RECT::default(); 4];
+        let item_h = 44.0_f32;
+        let gap = 6.0_f32;
+        let start_y = 20.0_f32;
+
+        unsafe {
+            for (i, page) in SettingsPage::ALL.iter().enumerate() {
+                let top = start_y + i as f32 * (item_h + gap);
+                let rect = RECT {
+                    left: 12,
+                    top: top as i32,
+                    right: (SIDEBAR_WIDTH - 12.0) as i32,
+                    bottom: (top + item_h) as i32,
+                };
+                rects[i] = rect;
+
+                let selected = *page == active;
+                let r = rect_to_d2d(&rect);
+                if selected {
+                    let rounded = D2D1_ROUNDED_RECT {
+                        rect: r,
+                        radiusX: 8.0,
+                        radiusY: 8.0,
+                    };
+                    self.render_target
+                        .FillRoundedRectangle(&rounded, &self.toggle_on_brush);
+                }
+
+                let text_brush = if selected {
+                    &self.button_text_brush
+                } else {
+                    &self.label_brush
+                };
+                let t: Vec<u16> = page.label().encode_utf16().collect();
+                self.render_target.DrawText(
+                    &t,
+                    &self.label_format,
+                    &d2d_rect(r.left + 12.0, r.top, r.right, r.bottom),
+                    text_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                    windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
+                );
+            }
+
+            // Separator between the rail and the content area.
+            self.render_target.DrawLine(
+                D2D_POINT_2F {
+                    x: SIDEBAR_WIDTH,
+                    y: 0.0,
+                },
+                D2D_POINT_2F {
+                    x: SIDEBAR_WIDTH,
+                    y: PANEL_HEIGHT,
+                },
+                &self.separator_brush,
+                1.0,
+                None,
+            );
+        }
+        rects
+    }
+
+    /// Keybindings page — every key the app responds to, in two sections:
+    /// GLOBAL HOTKEYS (Main Overlay, Label Mode — work anywhere in Windows) and
+    /// IN-OVERLAY KEYS (Confirm, Dismiss, and the two action modifiers — only
+    /// while the overlay is showing).
+    fn draw_keybindings_page(
+        &self,
+        config: &AppConfig,
+        state: &DrawState,
+        content_left: f32,
+        content_right: f32,
+        rects: &mut ControlRects,
+    ) {
+        let label_col_width = 180.0_f32;
+        let control_left = content_left + label_col_width;
+
+        // ---- GLOBAL HOTKEYS: work anywhere in Windows ----
+        let hk_y = 20.0_f32;
+        self.draw_section(content_left, content_right, hk_y, "GLOBAL HOTKEYS");
+
+        // Main hotkey field (y=50)
+        let mhk_y = 50.0_f32;
+        self.draw_label(content_left, label_col_width, mhk_y + 4.0, "Main Overlay");
+        let mhk_rect = RECT {
+            left: control_left as i32,
+            top: mhk_y as i32,
+            right: content_right as i32,
+            bottom: (mhk_y + 30.0) as i32,
+        };
+        rects.main_hotkey = mhk_rect;
+        let mhk_text_owned;
+        let mhk_text: &str = if state.recording_target == 1 {
+            "Press a key combination..."
+        } else if !state.main_hotkey_error.is_empty() {
+            &state.main_hotkey_error
+        } else {
+            mhk_text_owned =
+                crate::hotkey::format_hotkey(config.hotkey_modifiers, config.hotkey_vk);
+            &mhk_text_owned
+        };
+        self.draw_hotkey_field(
+            &mhk_rect,
+            mhk_text,
+            state.recording_target == 1,
+            !state.main_hotkey_error.is_empty(),
+        );
+
+        // Label hotkey field (y=90)
+        let lhk_y = 90.0_f32;
+        self.draw_label(content_left, label_col_width, lhk_y + 4.0, "Label Mode");
+        let lhk_rect = RECT {
+            left: control_left as i32,
+            top: lhk_y as i32,
+            right: content_right as i32,
+            bottom: (lhk_y + 30.0) as i32,
+        };
+        rects.label_hotkey = lhk_rect;
+        let lhk_text_owned;
+        let lhk_text: &str = if state.recording_target == 2 {
+            "Press a key combination..."
+        } else if !state.label_hotkey_error.is_empty() {
+            &state.label_hotkey_error
+        } else {
+            lhk_text_owned = crate::hotkey::format_hotkey(
+                config.label_hotkey_modifiers,
+                config.label_hotkey_vk,
+            );
+            &lhk_text_owned
+        };
+        self.draw_hotkey_field(
+            &lhk_rect,
+            lhk_text,
+            state.recording_target == 2,
+            !state.label_hotkey_error.is_empty(),
+        );
+
+        // ---- IN-OVERLAY KEYS: only while the overlay is showing ----
+        let ov_y = 140.0_f32;
+        self.draw_section(content_left, content_right, ov_y, "IN-OVERLAY KEYS");
+
+        // Confirm field — Space always confirms too; shown in the field text.
+        let confirm_y = 170.0_f32;
+        self.draw_label(content_left, label_col_width, confirm_y + 4.0, "Confirm");
+        let confirm_rect = RECT {
+            left: control_left as i32,
+            top: confirm_y as i32,
+            right: content_right as i32,
+            bottom: (confirm_y + 30.0) as i32,
+        };
+        rects.confirm_hotkey = confirm_rect;
+        let confirm_text_owned;
+        let confirm_text: &str = if state.recording_target == 3 {
+            "Press a key..."
+        } else if !state.confirm_error.is_empty() {
+            &state.confirm_error
+        } else {
+            confirm_text_owned = binding_with_fallback(
+                config.confirm_modifiers,
+                config.confirm_vk,
+                crate::keycodes::VK_SPACE,
+                true,
+            );
+            &confirm_text_owned
+        };
+        self.draw_hotkey_field(
+            &confirm_rect,
+            confirm_text,
+            state.recording_target == 3,
+            !state.confirm_error.is_empty(),
+        );
+
+        // Dismiss field — Escape always dismisses too; shown in the field text.
+        let dismiss_y = 210.0_f32;
+        self.draw_label(content_left, label_col_width, dismiss_y + 4.0, "Dismiss");
+        let dismiss_rect = RECT {
+            left: control_left as i32,
+            top: dismiss_y as i32,
+            right: content_right as i32,
+            bottom: (dismiss_y + 30.0) as i32,
+        };
+        rects.dismiss_hotkey = dismiss_rect;
+        let dismiss_text_owned;
+        let dismiss_text: &str = if state.recording_target == 4 {
+            "Press a key..."
+        } else if !state.dismiss_error.is_empty() {
+            &state.dismiss_error
+        } else {
+            dismiss_text_owned = binding_with_fallback(
+                config.dismiss_modifiers,
+                config.dismiss_vk,
+                crate::keycodes::VK_ESCAPE,
+                true,
+            );
+            &dismiss_text_owned
+        };
+        self.draw_hotkey_field(
+            &dismiss_rect,
+            dismiss_text,
+            state.recording_target == 4,
+            !state.dismiss_error.is_empty(),
+        );
+
+        // Tag-assign modifier
+        let tag_y = 270.0_f32;
+        self.draw_label(
+            content_left,
+            content_right - content_left,
+            tag_y,
+            "Tag-assign modifier (hold with 1-9)",
+        );
+        rects.tag_modifier_buttons =
+            self.draw_modifier_buttons(content_left, content_right, tag_y + 26.0, config.tag_modifier);
+
+        // Move-to-monitor modifier
+        let move_y = 340.0_f32;
+        self.draw_label(
+            content_left,
+            content_right - content_left,
+            move_y,
+            "Move-to-monitor modifier (hold with 1-9)",
+        );
+        rects.move_modifier_buttons = self.draw_modifier_buttons(
+            content_left,
+            content_right,
+            move_y + 26.0,
+            config.move_modifier,
+        );
+    }
+
+    /// Draw the 4 Ctrl/Alt/Shift/Win option buttons spanning `[x_left, x_right]`
+    /// at `y`, in `ActionModifier::ALL` order. Returns their hit-test rects.
+    fn draw_modifier_buttons(
+        &self,
+        x_left: f32,
+        x_right: f32,
+        y: f32,
+        selected: ActionModifier,
+    ) -> [RECT; 4] {
+        let mut rects = [RECT::default(); 4];
+        let gap = 8.0_f32;
+        let btn_w = (x_right - x_left - 3.0 * gap) / 4.0;
+        let btn_h = 28.0_f32;
+
+        for (i, modifier) in ActionModifier::ALL.iter().enumerate() {
+            let left = x_left + i as f32 * (btn_w + gap);
+            let rect = RECT {
+                left: left as i32,
+                top: y as i32,
+                right: (left + btn_w) as i32,
+                bottom: (y + btn_h) as i32,
+            };
+            rects[i] = rect;
+            self.draw_option_button(&rect, modifier.display_name(), *modifier == selected);
+        }
+        rects
+    }
+
+    /// Behavior page: direct-switch and launch-at-startup toggles, plus the
+    /// label-mode overlap strategy picker.
+    fn draw_behavior_page(
+        &self,
+        state: &DrawState,
+        content_left: f32,
+        content_right: f32,
+        rects: &mut ControlRects,
+    ) {
+        let label_col_width = 180.0_f32;
+
+        let beh_y = 20.0_f32;
+        self.draw_section(content_left, content_right, beh_y, "BEHAVIOR");
+
+        // Direct switch toggle (y=50)
+        let ds_y = 50.0_f32;
+        self.draw_label(content_left, label_col_width, ds_y + 5.0, "Direct switch");
+        let ds_rect = RECT {
+            left: (content_right - 60.0) as i32,
+            top: ds_y as i32,
+            right: content_right as i32,
+            bottom: (ds_y + 24.0) as i32,
+        };
+        rects.direct_switch_toggle = ds_rect;
+        self.draw_toggle(&ds_rect, state.direct_switch);
+
+        // Launch at startup toggle (y=90)
+        let las_y = 90.0_f32;
+        self.draw_label(content_left, label_col_width, las_y + 5.0, "Launch at startup");
+        let las_rect = RECT {
+            left: (content_right - 60.0) as i32,
+            top: las_y as i32,
+            right: content_right as i32,
+            bottom: (las_y + 24.0) as i32,
+        };
+        rects.launch_at_startup_toggle = las_rect;
+        self.draw_toggle(&las_rect, state.launch_at_startup);
+
+        // ---- LABEL MODE ----
+        let lm_y = 140.0_f32;
+        self.draw_section(content_left, content_right, lm_y, "LABEL MODE");
+
+        // Label overlap strategy: AutoNudge / VisibleRegion (y=170)
+        let lon_y = 170.0_f32;
+        self.draw_label(content_left, label_col_width, lon_y + 5.0, "Label overlap");
+        let opt_w = 130.0_f32;
+        let opt_h = 28.0_f32;
+        let opt_gap = 8.0_f32;
+        let opt_start_x = content_right - opt_w * 2.0 - opt_gap;
+        let nudge_rect = RECT {
+            left: opt_start_x as i32,
+            top: lon_y as i32,
+            right: (opt_start_x + opt_w) as i32,
+            bottom: (lon_y + opt_h) as i32,
+        };
+        rects.label_overlap_nudge = nudge_rect;
+        self.draw_option_button(
+            &nudge_rect,
+            "Auto nudge",
+            state.label_overlap_strategy == LabelOverlapStrategy::AutoNudge,
+        );
+
+        let visible_rect = RECT {
+            left: (opt_start_x + opt_w + opt_gap) as i32,
+            top: lon_y as i32,
+            right: (opt_start_x + opt_w * 2.0 + opt_gap) as i32,
+            bottom: (lon_y + opt_h) as i32,
+        };
+        rects.label_overlap_visible = visible_rect;
+        self.draw_option_button(
+            &visible_rect,
+            "Visible region",
+            state.label_overlap_strategy == LabelOverlapStrategy::VisibleRegion,
+        );
+    }
+
+    /// Appearance page: the six numeric sliders.
+    fn draw_appearance_page(
+        &self,
+        state: &DrawState,
+        content_left: f32,
+        content_right: f32,
+        rects: &mut ControlRects,
+    ) {
+        let label_col_width = 180.0_f32;
+        let control_left = content_left + label_col_width;
+
+        let app_y = 20.0_f32;
+        self.draw_section(content_left, content_right, app_y, "APPEARANCE");
+
+        // Sliders: overlay_opacity, background_opacity, fade_duration_ms,
+        //          grid_padding, label_font_size, title_font_size
+        let slider_configs: [(&str, f32, f32, &str); 6] = [
+            ("Overlay opacity", 50.0, 255.0, ""),
+            ("Background opacity", 0.0, 1.0, ""),
+            ("Fade duration", 0.0, 500.0, " ms"),
+            ("Grid padding", 4.0, 48.0, " px"),
+            ("Label font size", 10.0, 32.0, " px"),
+            ("Title font size", 8.0, 24.0, " px"),
+        ];
+
+        let slider_base_y = 50.0_f32;
+        let slider_row_h = 40.0_f32;
+        let slider_left = control_left;
+        let slider_right = content_right - 55.0; // leave room for value text
+
+        for (i, (label, _min_val, _max_val, suffix)) in slider_configs.iter().enumerate() {
+            let sy = slider_base_y + i as f32 * slider_row_h;
+            self.draw_label(content_left, label_col_width, sy + 8.0, label);
+
+            let track_rect = RECT {
+                left: slider_left as i32,
+                top: (sy + 12.0) as i32,
+                right: slider_right as i32,
+                bottom: (sy + 18.0) as i32,
+            };
+            rects.slider_tracks[i] = track_rect;
+
+            let raw_val = state.slider_values[i];
+            let t_min = slider_configs[i].1;
+            let t_max = slider_configs[i].2;
+            self.draw_slider(
+                &track_rect,
+                raw_val,
+                t_min,
+                t_max,
+                state.active_slider == Some(i),
+            );
+
+            // Value label
+            let val_text = if i == 0 {
+                format!("{}{}", raw_val as u32, suffix)
+            } else if i == 1 {
+                format!("{:.2}{}", raw_val, suffix)
+            } else {
+                format!("{:.0}{}", raw_val, suffix)
+            };
+            unsafe {
+                let vt: Vec<u16> = val_text.encode_utf16().collect();
+                self.render_target.DrawText(
+                    &vt,
+                    &self.value_format,
+                    &d2d_rect(slider_right + 4.0, sy + 8.0, content_right + 8.0, sy + 28.0),
+                    &self.value_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                    windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
+                );
+            }
+        }
+    }
+
+    /// Guide page: a read-only two-column reference (key, description) built
+    /// entirely from the live `AppConfig` via `hotkey::format_hotkey`, so it
+    /// can never drift from the actual configured bindings. Contributes no
+    /// rects — this page has nothing to click.
+    fn draw_guide_page(&self, config: &AppConfig, content_left: f32, content_right: f32) {
+        let g_y = 20.0_f32;
+        self.draw_section(content_left, content_right, g_y, "GUIDE");
+
+        let open_key = crate::hotkey::format_hotkey(config.hotkey_modifiers, config.hotkey_vk);
+        let label_key =
+            crate::hotkey::format_hotkey(config.label_hotkey_modifiers, config.label_hotkey_vk);
+        let confirm_key = binding_with_fallback(
+            config.confirm_modifiers,
+            config.confirm_vk,
+            crate::keycodes::VK_SPACE,
+            false,
+        );
+        let dismiss_key = binding_with_fallback(
+            config.dismiss_modifiers,
+            config.dismiss_vk,
+            crate::keycodes::VK_ESCAPE,
+            false,
+        );
+        let tag_key = format!("{}+1-9", config.tag_modifier.display_name());
+        let move_key = format!("{}+1-9", config.move_modifier.display_name());
+
+        let rows: [(&str, &str); 8] = [
+            (open_key.as_str(), "Open the overlay"),
+            (label_key.as_str(), "Open label mode"),
+            ("A-Z", "Select a window by its letter"),
+            (confirm_key.as_str(), "Confirm the selection"),
+            (dismiss_key.as_str(), "Dismiss the overlay"),
+            (tag_key.as_str(), "Assign a tag to the selected window"),
+            ("1-9", "Jump to a tagged window"),
+            (move_key.as_str(), "Move the selected window to a monitor"),
+        ];
+
+        let key_col_width = 190.0_f32;
+        let desc_col_left = content_left + key_col_width + 16.0;
+        let desc_col_width = content_right - desc_col_left;
+        let row_base_y = 56.0_f32;
+        let row_h = 34.0_f32;
+
+        unsafe {
+            for (i, (key, desc)) in rows.iter().enumerate() {
+                let y = row_base_y + i as f32 * row_h;
+
+                let kt: Vec<u16> = key.encode_utf16().collect();
+                self.render_target.DrawText(
+                    &kt,
+                    &self.hotkey_format,
+                    &d2d_rect(content_left, y, content_left + key_col_width, y + row_h - 6.0),
+                    &self.value_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                    windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
+                );
+
+                let dt: Vec<u16> = desc.encode_utf16().collect();
+                self.render_target.DrawText(
+                    &dt,
+                    &self.label_format,
+                    &d2d_rect(
+                        desc_col_left,
+                        y,
+                        desc_col_left + desc_col_width,
+                        y + row_h - 6.0,
+                    ),
+                    &self.label_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                    windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
+                );
+            }
+        }
     }
 
     /// Draw a hotkey field (rounded rect with text).
@@ -733,5 +1140,47 @@ impl SettingsRenderer {
                 windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::binding_with_fallback;
+    use crate::keycodes::{MOD_CONTROL, VK_ESCAPE, VK_J, VK_SPACE, VK_TAB};
+
+    // The default Dismiss binding IS Escape, so naively appending the permanent
+    // fallback rendered "Esc (or Esc)" in the settings field and on the Guide.
+    #[test]
+    fn test_binding_matching_fallback_omits_the_suffix() {
+        assert_eq!(
+            binding_with_fallback(0, VK_ESCAPE, VK_ESCAPE, true),
+            "Esc",
+            "Dismiss bound to its own fallback must not render 'Esc (or Esc)'"
+        );
+        assert_eq!(
+            binding_with_fallback(0, VK_SPACE, VK_SPACE, false),
+            "Space",
+            "Confirm bound to Space must not render 'Space or Space'"
+        );
+    }
+
+    #[test]
+    fn test_binding_differing_from_fallback_keeps_the_suffix() {
+        assert_eq!(binding_with_fallback(0, VK_TAB, VK_SPACE, true), "Tab (or Space)");
+        assert_eq!(binding_with_fallback(0, VK_TAB, VK_SPACE, false), "Tab or Space");
+    }
+
+    // A modifier-qualified binding on the fallback key is a *different* combo,
+    // so the fallback hint must still show — Ctrl+Esc is not plain Esc.
+    #[test]
+    fn test_modifier_qualified_fallback_key_keeps_the_suffix() {
+        assert_eq!(
+            binding_with_fallback(MOD_CONTROL, VK_ESCAPE, VK_ESCAPE, true),
+            "Ctrl+Esc (or Esc)"
+        );
+        assert_eq!(
+            binding_with_fallback(MOD_CONTROL, VK_J, VK_SPACE, true),
+            "Ctrl+J (or Space)"
+        );
     }
 }

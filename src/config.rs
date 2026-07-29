@@ -1,4 +1,7 @@
-use crate::keycodes::{MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_WIN, VK_Q, VK_Y};
+use crate::keycodes::{
+    is_digit, is_letter, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_WIN, VK_CONTROL, VK_ESCAPE,
+    VK_LWIN, VK_MENU, VK_Q, VK_RETURN, VK_SHIFT, VK_Y,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -41,6 +44,69 @@ fn default_background_opacity() -> f32 {
 }
 fn default_label_overlap_strategy() -> LabelOverlapStrategy {
     LabelOverlapStrategy::AutoNudge
+}
+fn default_confirm_modifiers() -> u32 {
+    0
+}
+fn default_confirm_vk() -> u32 {
+    VK_RETURN
+}
+fn default_dismiss_modifiers() -> u32 {
+    0
+}
+fn default_dismiss_vk() -> u32 {
+    VK_ESCAPE
+}
+fn default_tag_modifier() -> ActionModifier {
+    ActionModifier::Ctrl
+}
+fn default_move_modifier() -> ActionModifier {
+    ActionModifier::Shift
+}
+
+/// A modifier key usable for the overlay's tag-assign and move-to-monitor actions.
+/// Distinct from the `MOD_*` flags used by `RegisterHotKey`: this is a single
+/// modifier choice compared against physical key state via `GetAsyncKeyState`,
+/// not a global-hotkey registration.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionModifier {
+    Ctrl,
+    Alt,
+    Shift,
+    Win,
+}
+
+impl ActionModifier {
+    /// All variants, in the fixed order shown by the Keybindings page's option
+    /// buttons. Single source of truth for both rendering order and the
+    /// `tag_modifier_buttons`/`move_modifier_buttons` rect indices.
+    pub const ALL: [ActionModifier; 4] = [
+        ActionModifier::Ctrl,
+        ActionModifier::Alt,
+        ActionModifier::Shift,
+        ActionModifier::Win,
+    ];
+
+    /// The generic (either-side) `GetAsyncKeyState` virtual-key code for this modifier.
+    pub fn to_vk(self) -> u32 {
+        match self {
+            ActionModifier::Ctrl => VK_CONTROL,
+            ActionModifier::Alt => VK_MENU,
+            ActionModifier::Shift => VK_SHIFT,
+            ActionModifier::Win => VK_LWIN,
+        }
+    }
+
+    /// Human-readable name for display in the Keybindings and Guide pages.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            ActionModifier::Ctrl => "Ctrl",
+            ActionModifier::Alt => "Alt",
+            ActionModifier::Shift => "Shift",
+            ActionModifier::Win => "Win",
+        }
+    }
 }
 
 /// How to handle overlapping labels in label mode.
@@ -111,6 +177,32 @@ pub struct AppConfig {
     /// Default: AutoNudge.
     #[serde(default = "default_label_overlap_strategy")]
     pub label_overlap_strategy: LabelOverlapStrategy,
+
+    // --- Configurable in-overlay keybindings ---
+    /// Modifier flags (MOD_CONTROL etc., 0 = none) for the custom Confirm key.
+    /// Space always confirms regardless of this value.
+    #[serde(default = "default_confirm_modifiers")]
+    pub confirm_modifiers: u32,
+    /// Virtual key code for the custom Confirm key. Default: VK_RETURN.
+    #[serde(default = "default_confirm_vk")]
+    pub confirm_vk: u32,
+    /// Modifier flags (MOD_CONTROL etc., 0 = none) for the custom Dismiss key.
+    /// Escape always dismisses regardless of this value.
+    #[serde(default = "default_dismiss_modifiers")]
+    pub dismiss_modifiers: u32,
+    /// Virtual key code for the custom Dismiss key. Default: VK_ESCAPE.
+    #[serde(default = "default_dismiss_vk")]
+    pub dismiss_vk: u32,
+    /// Modifier held with 1-9 to assign a session tag to the selected window.
+    #[serde(default = "default_tag_modifier")]
+    pub tag_modifier: ActionModifier,
+    /// Modifier held with 1-9 to move the selected window to a monitor's center.
+    #[serde(default = "default_move_modifier")]
+    pub move_modifier: ActionModifier,
+    /// Whether the Guide page has already been shown once, automatically, on
+    /// first launch. Set to true right after that first auto-open.
+    #[serde(default)]
+    pub guide_shown: bool,
 }
 
 impl Default for AppConfig {
@@ -130,6 +222,13 @@ impl Default for AppConfig {
             background_opacity: default_background_opacity(),
             quick_tags: Vec::new(),
             label_overlap_strategy: default_label_overlap_strategy(),
+            confirm_modifiers: default_confirm_modifiers(),
+            confirm_vk: default_confirm_vk(),
+            dismiss_modifiers: default_dismiss_modifiers(),
+            dismiss_vk: default_dismiss_vk(),
+            tag_modifier: default_tag_modifier(),
+            move_modifier: default_move_modifier(),
+            guide_shown: false,
         }
     }
 }
@@ -149,6 +248,35 @@ impl AppConfig {
             .retain(|entry| (1..=9).contains(&entry.number) && !entry.exe_path.is_empty());
         self.quick_tags.sort_by_key(|entry| entry.number);
         self.quick_tags.dedup_by_key(|entry| entry.number);
+
+        // The tag-assign and move-to-monitor modifiers must stay distinct —
+        // otherwise 1-9 could never disambiguate the two actions. Repair by
+        // resetting both to their defaults.
+        if self.tag_modifier == self.move_modifier {
+            self.tag_modifier = default_tag_modifier();
+            self.move_modifier = default_move_modifier();
+        }
+
+        // A bare (unmodified) letter for Confirm/Dismiss would collide with
+        // window-selection (a-z) keys, so repair it back to the default combo.
+        // A digit is repaired UNCONDITIONALLY, modifiers or not: 1-9 is fully
+        // claimed by tag-assign/tag-jump/move-to-monitor, so a digit
+        // Confirm/Dismiss binding (e.g. a hand-edited Ctrl+3) can never fire —
+        // `interaction.rs`'s digit branch returns before the Confirm/Dismiss
+        // check ever runs. This mirrors the recorder's own rule in
+        // `settings_panel.rs::ll_keyboard_proc`; keep the two in sync.
+        if is_digit(self.confirm_vk)
+            || (self.confirm_modifiers == 0 && is_letter(self.confirm_vk))
+        {
+            self.confirm_modifiers = default_confirm_modifiers();
+            self.confirm_vk = default_confirm_vk();
+        }
+        if is_digit(self.dismiss_vk)
+            || (self.dismiss_modifiers == 0 && is_letter(self.dismiss_vk))
+        {
+            self.dismiss_modifiers = default_dismiss_modifiers();
+            self.dismiss_vk = default_dismiss_vk();
+        }
     }
 
     pub fn set_quick_tag(&mut self, number: u8, exe_path: String) {
@@ -275,6 +403,13 @@ mod tests {
                 exe_path: String::from(r"C:\\Windows\\System32\\notepad.exe"),
             }],
             label_overlap_strategy: LabelOverlapStrategy::VisibleRegion,
+            confirm_modifiers: MOD_CONTROL,
+            confirm_vk: VK_F1,
+            dismiss_modifiers: MOD_ALT,
+            dismiss_vk: VK_F1,
+            tag_modifier: ActionModifier::Alt,
+            move_modifier: ActionModifier::Win,
+            guide_shown: true,
         };
         AppConfig::save(&dir, &original).expect("save should succeed");
         let loaded = AppConfig::load(&dir).expect("load should succeed");
@@ -289,6 +424,13 @@ mod tests {
         assert!((loaded.background_opacity - original.background_opacity).abs() < 0.001);
         assert_eq!(loaded.quick_tags, original.quick_tags);
         assert_eq!(loaded.label_overlap_strategy, original.label_overlap_strategy);
+        assert_eq!(loaded.confirm_modifiers, original.confirm_modifiers);
+        assert_eq!(loaded.confirm_vk, original.confirm_vk);
+        assert_eq!(loaded.dismiss_modifiers, original.dismiss_modifiers);
+        assert_eq!(loaded.dismiss_vk, original.dismiss_vk);
+        assert_eq!(loaded.tag_modifier, original.tag_modifier);
+        assert_eq!(loaded.move_modifier, original.move_modifier);
+        assert_eq!(loaded.guide_shown, original.guide_shown);
         // Cleanup
         let _ = fs::remove_dir_all(&dir);
     }
@@ -341,6 +483,13 @@ mod tests {
         assert!(!config.direct_switch);
         assert!(config.quick_tags.is_empty());
         assert_eq!(config.label_overlap_strategy, LabelOverlapStrategy::AutoNudge);
+        assert_eq!(config.confirm_modifiers, 0);
+        assert_eq!(config.confirm_vk, VK_RETURN);
+        assert_eq!(config.dismiss_modifiers, 0);
+        assert_eq!(config.dismiss_vk, VK_ESCAPE);
+        assert_eq!(config.tag_modifier, ActionModifier::Ctrl);
+        assert_eq!(config.move_modifier, ActionModifier::Shift);
+        assert!(!config.guide_shown);
     }
 
     #[test]
@@ -437,6 +586,87 @@ mod tests {
             "validate() must not change default launch_at_startup");
         assert_eq!(validated.label_overlap_strategy, original.label_overlap_strategy,
             "validate() must not change default label_overlap_strategy");
+        assert_eq!(validated.confirm_modifiers, original.confirm_modifiers,
+            "validate() must not change default confirm_modifiers");
+        assert_eq!(validated.confirm_vk, original.confirm_vk,
+            "validate() must not change default confirm_vk");
+        assert_eq!(validated.dismiss_modifiers, original.dismiss_modifiers,
+            "validate() must not change default dismiss_modifiers");
+        assert_eq!(validated.dismiss_vk, original.dismiss_vk,
+            "validate() must not change default dismiss_vk");
+        assert_eq!(validated.tag_modifier, original.tag_modifier,
+            "validate() must not change default tag_modifier");
+        assert_eq!(validated.move_modifier, original.move_modifier,
+            "validate() must not change default move_modifier");
+    }
+
+    // Plan step 4: validate() repairs an equal tag/move modifier pair back to defaults.
+    #[test]
+    fn test_validate_repairs_equal_action_modifiers() {
+        let mut config = AppConfig {
+            tag_modifier: ActionModifier::Shift,
+            move_modifier: ActionModifier::Shift,
+            ..Default::default()
+        };
+        config.validate();
+        assert_eq!(config.tag_modifier, ActionModifier::Ctrl);
+        assert_eq!(config.move_modifier, ActionModifier::Shift);
+    }
+
+    // Plan step 4: validate() resets a bare-letter/digit Confirm or Dismiss key.
+    #[test]
+    fn test_validate_repairs_bare_alphanumeric_confirm_and_dismiss() {
+        let mut config = AppConfig {
+            confirm_modifiers: 0,
+            confirm_vk: crate::keycodes::VK_J,
+            dismiss_modifiers: 0,
+            dismiss_vk: crate::keycodes::VK_5,
+            ..Default::default()
+        };
+        config.validate();
+        assert_eq!(config.confirm_modifiers, 0);
+        assert_eq!(config.confirm_vk, VK_RETURN);
+        assert_eq!(config.dismiss_modifiers, 0);
+        assert_eq!(config.dismiss_vk, VK_ESCAPE);
+    }
+
+    // A modifier-qualified letter, and a non-alphanumeric key with or without
+    // a modifier, are left untouched for Confirm/Dismiss.
+    #[test]
+    fn test_validate_keeps_modifier_qualified_confirm_and_dismiss() {
+        let mut config = AppConfig {
+            confirm_modifiers: MOD_CONTROL,
+            confirm_vk: crate::keycodes::VK_J,
+            dismiss_modifiers: MOD_ALT,
+            dismiss_vk: crate::keycodes::VK_F4,
+            ..Default::default()
+        };
+        config.validate();
+        assert_eq!(config.confirm_modifiers, MOD_CONTROL);
+        assert_eq!(config.confirm_vk, crate::keycodes::VK_J);
+        assert_eq!(config.dismiss_modifiers, MOD_ALT);
+        assert_eq!(config.dismiss_vk, crate::keycodes::VK_F4);
+    }
+
+    // Hermes BLOCKER: a digit Confirm/Dismiss key must be repaired even when
+    // modifier-qualified (e.g. a hand-edited Ctrl+3 in config.toml) — digits
+    // are fully claimed by tag-assign/tag-jump/move-to-monitor, so such a
+    // binding can never actually fire at runtime (interaction.rs's digit
+    // branch returns before the Confirm/Dismiss check runs).
+    #[test]
+    fn test_validate_repairs_modifier_qualified_digit_confirm_and_dismiss() {
+        let mut config = AppConfig {
+            confirm_modifiers: MOD_CONTROL,
+            confirm_vk: crate::keycodes::VK_3,
+            dismiss_modifiers: MOD_ALT,
+            dismiss_vk: crate::keycodes::VK_7,
+            ..Default::default()
+        };
+        config.validate();
+        assert_eq!(config.confirm_modifiers, 0);
+        assert_eq!(config.confirm_vk, VK_RETURN);
+        assert_eq!(config.dismiss_modifiers, 0);
+        assert_eq!(config.dismiss_vk, VK_ESCAPE);
     }
 
     #[test]
@@ -454,6 +684,15 @@ mod tests {
         assert_eq!(config.fade_duration_ms, 150); // default
         assert!((config.background_opacity - 0.86).abs() < 0.001); // default
         assert!(config.quick_tags.is_empty());
+        // Plan step 4 / spec "Config file predating the feature": confirm is
+        // Enter, dismiss is Escape, tag modifier is Ctrl, move modifier is Shift.
+        assert_eq!(config.confirm_modifiers, 0);
+        assert_eq!(config.confirm_vk, VK_RETURN);
+        assert_eq!(config.dismiss_modifiers, 0);
+        assert_eq!(config.dismiss_vk, VK_ESCAPE);
+        assert_eq!(config.tag_modifier, ActionModifier::Ctrl);
+        assert_eq!(config.move_modifier, ActionModifier::Shift);
+        assert!(!config.guide_shown);
         // Cleanup
         let _ = fs::remove_dir_all(&dir);
     }

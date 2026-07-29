@@ -114,6 +114,42 @@ pub const VK_Y: u32 = 0x59;
 pub const VK_Z: u32 = 0x5A;
 
 // ---------------------------------------------------------------------------
+// Navigation / editing keys — reachable by the Confirm/Dismiss recorder now
+// that it accepts bare non-alphanumeric keys (see `hotkey::vk_to_name`).
+// ---------------------------------------------------------------------------
+
+pub const VK_PRIOR: u32 = 0x21; // Page Up
+pub const VK_NEXT: u32 = 0x22; // Page Down
+pub const VK_END: u32 = 0x23;
+pub const VK_HOME: u32 = 0x24;
+pub const VK_LEFT: u32 = 0x25;
+pub const VK_UP: u32 = 0x26;
+pub const VK_RIGHT: u32 = 0x27;
+pub const VK_DOWN: u32 = 0x28;
+pub const VK_INSERT: u32 = 0x2D;
+pub const VK_DELETE: u32 = 0x2E;
+
+// ---------------------------------------------------------------------------
+// Numpad keys  (0x60–0x6F) — reachable by the Confirm/Dismiss recorder.
+// ---------------------------------------------------------------------------
+
+pub const VK_NUMPAD0: u32 = 0x60;
+pub const VK_NUMPAD1: u32 = 0x61;
+pub const VK_NUMPAD2: u32 = 0x62;
+pub const VK_NUMPAD3: u32 = 0x63;
+pub const VK_NUMPAD4: u32 = 0x64;
+pub const VK_NUMPAD5: u32 = 0x65;
+pub const VK_NUMPAD6: u32 = 0x66;
+pub const VK_NUMPAD7: u32 = 0x67;
+pub const VK_NUMPAD8: u32 = 0x68;
+pub const VK_NUMPAD9: u32 = 0x69;
+pub const VK_MULTIPLY: u32 = 0x6A; // Numpad *
+pub const VK_ADD: u32 = 0x6B; // Numpad +
+pub const VK_SUBTRACT: u32 = 0x6D; // Numpad -
+pub const VK_DECIMAL: u32 = 0x6E; // Numpad .
+pub const VK_DIVIDE: u32 = 0x6F; // Numpad /
+
+// ---------------------------------------------------------------------------
 // Function keys  (0x70–0x7B = F1–F12)
 // ---------------------------------------------------------------------------
 
@@ -129,6 +165,23 @@ pub const VK_F9: u32 = 0x78;
 pub const VK_F10: u32 = 0x79;
 pub const VK_F11: u32 = 0x7A;
 pub const VK_F12: u32 = 0x7B;
+
+// ---------------------------------------------------------------------------
+// OEM punctuation keys — US-layout names. Reachable by the Confirm/Dismiss
+// recorder now that it accepts bare non-alphanumeric keys.
+// ---------------------------------------------------------------------------
+
+pub const VK_OEM_1: u32 = 0xBA; // ;:
+pub const VK_OEM_PLUS: u32 = 0xBB; // =+
+pub const VK_OEM_COMMA: u32 = 0xBC; // ,<
+pub const VK_OEM_MINUS: u32 = 0xBD; // -_
+pub const VK_OEM_PERIOD: u32 = 0xBE; // .>
+pub const VK_OEM_2: u32 = 0xBF; // /?
+pub const VK_OEM_3: u32 = 0xC0; // `~
+pub const VK_OEM_4: u32 = 0xDB; // [{
+pub const VK_OEM_5: u32 = 0xDC; // \|
+pub const VK_OEM_6: u32 = 0xDD; // ]}
+pub const VK_OEM_7: u32 = 0xDE; // '"
 
 // ---------------------------------------------------------------------------
 // Windows message IDs used as raw integers in wndproc callbacks.
@@ -181,4 +234,19 @@ pub fn is_modifier_only(vk: u32) -> bool {
             | VK_LWIN
             | VK_RWIN
     )
+}
+
+/// Normalize a raw (possibly side-specific) modifier VK — as reported by the
+/// low-level keyboard hook — to the "generic" VK used by
+/// `ActionModifier::to_vk()` and `GetAsyncKeyState`. Returns `None` if `vk`
+/// is not a modifier key at all.
+#[inline]
+pub fn normalize_modifier_vk(vk: u32) -> Option<u32> {
+    match vk {
+        VK_SHIFT | VK_LSHIFT | VK_RSHIFT => Some(VK_SHIFT),
+        VK_CONTROL | VK_LCONTROL | VK_RCONTROL => Some(VK_CONTROL),
+        VK_MENU | VK_LMENU | VK_RMENU => Some(VK_MENU),
+        VK_LWIN | VK_RWIN => Some(VK_LWIN),
+        _ => None,
+    }
 }

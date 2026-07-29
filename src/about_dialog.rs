@@ -8,7 +8,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn show_about(parent: HWND) {
     unsafe {
         let text = format!(
-            "Window Selector v{}\n\nKeyboard-driven window switching for Windows 11.\n\nPress Ctrl+Alt+Space to activate the overlay.\nPress a letter to select a window, then Enter to switch.",
+            "Window Selector v{}\n\nKeyboard-driven window switching for Windows 11.\n\nHotkeys and keybindings are user-configurable — right-click the tray icon and choose Guide to see your current shortcuts.",
             VERSION
         );
         let text_w: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
