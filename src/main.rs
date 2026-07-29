@@ -29,15 +29,14 @@ mod window_mover;
 mod window_switcher;
 
 use config::AppConfig;
-use interaction::{handle_key_down, KeyAction};
-use keycodes::VK_SHIFT;
+use interaction::{handle_key_down, KeyAction, Keybindings};
 use monitor::get_all_monitors;
 use mru_tracker::MruTracker;
 use overlay::OverlayManager;
 use state::{OverlayState, SessionTags};
 use tray::{
     add_tray_icon, remove_tray_icon, show_balloon, MENU_ABOUT, MENU_DIRECT_SWITCH, MENU_EXIT,
-    MENU_SETTINGS, WM_TRAY_CALLBACK,
+    MENU_GUIDE, MENU_SETTINGS, WM_TRAY_CALLBACK,
 };
 use window_enumerator::{
     filter_occluded_for_label_mode, refresh_quick_tags, register_overlay_hwnds, snapshot_windows,
@@ -373,6 +372,22 @@ unsafe fn run_message_loop(config: AppConfig, config_dir: std::path::PathBuf) {
     // Add tray icon.
     if let Err(e) = add_tray_icon(msg_hwnd) {
         tracing::error!("Tray icon failed: {:?}", e);
+    }
+
+    // First run: auto-open the settings window on the Guide page exactly
+    // once, so a new user discovers their (default) keybindings without
+    // having to find the tray menu first. Gated on `guide_shown` so it never
+    // reappears on subsequent launches. Done here — after both the message
+    // window and the tray icon exist — so the settings panel has a valid
+    // `msg_hwnd` for its DPI query.
+    if !(*app_state_ptr).config.guide_shown {
+        (*app_state_ptr)
+            .settings_panel
+            .open_on_page(msg_hwnd, settings_renderer::SettingsPage::Guide);
+        (*app_state_ptr).config.guide_shown = true;
+        if let Err(e) = AppConfig::save(&(*app_state_ptr).config_dir, &(*app_state_ptr).config) {
+            tracing::error!("Failed to save config after first-run guide_shown flag: {}", e);
+        }
     }
 
     // Register global hotkey (main overlay).
@@ -879,6 +894,23 @@ unsafe fn handle_hotkey(app: &mut AppState) {
     }
 }
 
+/// True if `modifier` is currently physically held, via `GetAsyncKeyState`.
+///
+/// Ctrl/Alt/Shift each have a "generic" VK (`VK_CONTROL`/`VK_MENU`/`VK_SHIFT`)
+/// that `GetAsyncKeyState` reports as held regardless of which physical side
+/// is down, so `ActionModifier::to_vk()` is sufficient for those. Windows has
+/// no such generic key — only `VK_LWIN`/`VK_RWIN` — so `to_vk()` names just
+/// the left one; a direct `GetAsyncKeyState` read on it alone would miss the
+/// right Windows key. Both sides are checked here explicitly.
+unsafe fn action_modifier_held(modifier: config::ActionModifier) -> bool {
+    if modifier == config::ActionModifier::Win {
+        GetAsyncKeyState(keycodes::VK_LWIN as i32) < 0
+            || GetAsyncKeyState(keycodes::VK_RWIN as i32) < 0
+    } else {
+        GetAsyncKeyState(modifier.to_vk() as i32) < 0
+    }
+}
+
 unsafe fn activate_overlay(app: &mut AppState) {
     app.previous_foreground = {
         let hw = GetForegroundWindow();
@@ -919,10 +951,10 @@ unsafe fn activate_overlay(app: &mut AppState) {
     // of whether SetForegroundWindow succeeded.
     keyboard_hook::set_active(true);
 
-    // Seed monitor-badge visibility from the Shift key's current physical
-    // state, so badges are already showing if the user opened the overlay
-    // with Shift already held down.
-    app.shift_badges_visible = GetAsyncKeyState(VK_SHIFT as i32) < 0;
+    // Seed monitor-badge visibility from the configured move-to-monitor
+    // modifier's current physical state, so badges are already showing if the
+    // user opened the overlay with that modifier already held down.
+    app.shift_badges_visible = action_modifier_held(app.config.move_modifier);
 }
 
 /// Dismiss the overlay without switching to any window; restore previous foreground.
@@ -1029,6 +1061,10 @@ unsafe fn handle_menu_command(app: &mut AppState, hwnd: HWND, cmd: u32) {
         MENU_SETTINGS => {
             app.settings_panel.open(hwnd);
         }
+        MENU_GUIDE => {
+            app.settings_panel
+                .open_on_page(hwnd, settings_renderer::SettingsPage::Guide);
+        }
         MENU_ABOUT => {
             about_dialog::show_about(hwnd);
         }
@@ -1047,23 +1083,37 @@ unsafe fn handle_menu_command(app: &mut AppState, hwnd: HWND, cmd: u32) {
 fn keyboard_hook_handler(vk_code: u32) -> bool {
     unsafe { handle_overlay_key(vk_code) };
 
-    // Don't swallow modifier keys — let them pass through so
-    // GetAsyncKeyState can see Ctrl/Shift/Alt state for Ctrl+Number tagging.
+    // Don't swallow Ctrl/Alt/Shift — let them pass through so GetAsyncKeyState
+    // can see their state for the tag-assign and move-to-monitor actions.
+    //
+    // Win is different: swallowing it while the overlay is open is the
+    // pre-existing default behavior (Win taps must not leak to the shell and
+    // pop the Start Menu from under the overlay), so it stays swallowed
+    // UNLESS the user has actually assigned Win to tag_modifier or
+    // move_modifier — only then does GetAsyncKeyState need to see it.
+    let win_is_action_modifier = unsafe {
+        let app_ptr = get_app_state();
+        !app_ptr.is_null()
+            && ((*app_ptr).config.tag_modifier == config::ActionModifier::Win
+                || (*app_ptr).config.move_modifier == config::ActionModifier::Win)
+    };
+
     match vk_code {
         0xA0..=0xA5 | // VK_LSHIFT, VK_RSHIFT, VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU
         0x10..=0x12   // VK_SHIFT, VK_CONTROL, VK_MENU (generic)
         => false, // pass through
+        0x5B..=0x5C if win_is_action_modifier => false, // VK_LWIN, VK_RWIN — only when Win is actually assigned
         _ => true, // swallow
     }
 }
 
-/// Low-level keyboard hook's Shift-modifier callback (see `keyboard_hook::ModifierHandler`).
-/// Fired on every Shift press/release while the hook is active — including
-/// auto-repeat keydowns from a held key, so `set_shift_badges_visible` must
-/// no-op when the flag hasn't actually changed to avoid repainting on every
-/// repeat tick.
-fn shift_modifier_handler(shift_down: bool) {
-    unsafe { set_shift_badges_visible(shift_down) };
+/// Low-level keyboard hook's modifier callback (see `keyboard_hook::ModifierHandler`).
+/// Fired on every press/release of ANY modifier key while the hook is active —
+/// including auto-repeat keydowns from a held key — so `set_shift_badges_visible`
+/// both filters for the *configured* move-to-monitor modifier and must no-op
+/// when the flag hasn't actually changed, to avoid repainting on every repeat tick.
+fn shift_modifier_handler(vk: u32, is_down: bool) {
+    unsafe { set_shift_badges_visible(vk, is_down) };
 }
 
 /// Pure decision extracted from `set_shift_badges_visible`: should the flag be
@@ -1076,15 +1126,26 @@ fn should_update_shift_badges(overlay_state: &OverlayState, current: bool, new_v
 }
 
 /// Update `shift_badges_visible` and repaint the overlay if the flag actually
-/// changed. Only takes effect while `overlay_state` is `Active` — the flag is
-/// otherwise irrelevant (label mode never shows badges; `Hidden`/fading states
-/// have nothing to repaint).
-unsafe fn set_shift_badges_visible(visible: bool) {
+/// changed. `vk` is the raw modifier VK reported by the low-level hook; only
+/// transitions of the *configured* move-to-monitor modifier are honored — a
+/// press of some other modifier (e.g. Ctrl when the move modifier is Shift)
+/// is ignored. Only takes effect while `overlay_state` is `Active` — the flag
+/// is otherwise irrelevant (label mode never shows badges; `Hidden`/fading
+/// states have nothing to repaint).
+unsafe fn set_shift_badges_visible(vk: u32, visible: bool) {
     let app_ptr = get_app_state();
     if app_ptr.is_null() {
         return;
     }
     let app = &mut *app_ptr;
+
+    let normalized = match keycodes::normalize_modifier_vk(vk) {
+        Some(v) => v,
+        None => return,
+    };
+    if normalized != app.config.move_modifier.to_vk() {
+        return;
+    }
 
     if !should_update_shift_badges(&app.overlay_state, app.shift_badges_visible, visible) {
         return;
@@ -1124,6 +1185,7 @@ unsafe fn handle_overlay_key(vk_code: u32) {
         &mut app.session_tags,
         app.config.direct_switch,
         app.overlay_manager.monitors.len(),
+        &Keybindings::from(&app.config),
     );
 
     tracing::debug!("Key action: {:?}", action);
