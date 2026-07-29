@@ -78,8 +78,12 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $installerPath = "target\x86_64-pc-windows-msvc\release\WindowSelector-${env:VERSION}-setup.exe"
-          & makensis /DVERSION=$env:VERSION installer\installer.nsi
+          # TARGET must match the --target used by the build step above.
+          # installer.nsi defaults to the gnu triple from .cargo/config.toml
+          # for local `make installer`, so CI has to override it explicitly.
+          $target = "x86_64-pc-windows-msvc"
+          $installerPath = "target\$target\release\WindowSelector-${env:VERSION}-setup.exe"
+          & makensis /DVERSION=$env:VERSION /DTARGET=$target installer\installer.nsi
           if ($LASTEXITCODE -ne 0) {
             Write-Host "makensis failed with exit code $LASTEXITCODE"
             echo "built=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append

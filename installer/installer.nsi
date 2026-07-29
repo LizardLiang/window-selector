@@ -37,6 +37,16 @@
   !define VERSION "0.0.0"
 !endif
 
+; Cargo target triple, passed from the build system via /DTARGET=<triple>.
+; Defaults to the triple in .cargo/config.toml so a plain `make installer`
+; works locally. CI must override it: the release workflow builds with an
+; explicit `--target x86_64-pc-windows-msvc`, which ignores that config.
+; Leaving this path hardcoded is what broke the first v0.4.0 release run.
+; NOTE: this file is ACP-encoded, so keep every comment pure ASCII.
+!ifndef TARGET
+  !define TARGET "x86_64-pc-windows-gnu"
+!endif
+
 ; Registry path for Add/Remove Programs entry (used in Install and Uninstall sections)
 !define UNINST_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\WindowSelector"
 
@@ -48,7 +58,7 @@
 ; 3. Global attributes
 ; ---------------------------------------------------------------------------
 Name "Window Selector"
-OutFile "..\target\x86_64-pc-windows-gnu\release\WindowSelector-${VERSION}-setup.exe"
+OutFile "..\target\${TARGET}\release\WindowSelector-${VERSION}-setup.exe"
 InstallDir "$LOCALAPPDATA\window-selector"
 InstallDirRegKey HKCU "${UNINST_REG_KEY}" "InstallLocation"
 RequestExecutionLevel user
@@ -260,7 +270,7 @@ Section "Install"
   SetOutPath "$INSTDIR"
 
   ; Install application binary and icon.
-  File "..\target\x86_64-pc-windows-gnu\release\window-selector.exe"
+  File "..\target\${TARGET}\release\window-selector.exe"
   File "..\resources\app.ico"
 
   ; Create uninstaller stub in the install directory.

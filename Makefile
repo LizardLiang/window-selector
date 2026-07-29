@@ -2,7 +2,7 @@
 # Builds the Rust binary and packages it into a Windows installer via NSIS.
 #
 # Prerequisites:
-#   - Rust toolchain (stable, target x86_64-pc-windows-msvc)
+#   - Rust toolchain (stable, target x86_64-pc-windows-gnu — see .cargo/config.toml)
 #   - NSIS 3.x (makensis on PATH)
 #   - PowerShell 5.1+ (ships with Windows 10/11)
 #   - GNU Make (or run cargo and makensis commands manually)
@@ -18,14 +18,18 @@ VERSION := $(shell powershell -NoProfile -Command \
 NSIS  := makensis
 CARGO := cargo
 
+# Cargo target triple. Must match .cargo/config.toml, and is passed through to
+# installer.nsi so the installer never has to guess where the binary landed.
+TARGET := x86_64-pc-windows-gnu
+
 .PHONY: build installer clean
 
 build:
 	$(CARGO) build --release
 
 installer: build
-	$(NSIS) /DVERSION=$(VERSION) installer/installer.nsi
-	@echo "Installer created: target/x86_64-pc-windows-gnu/release/WindowSelector-$(VERSION)-setup.exe"
+	$(NSIS) /DVERSION=$(VERSION) /DTARGET=$(TARGET) installer/installer.nsi
+	@echo "Installer created: target/$(TARGET)/release/WindowSelector-$(VERSION)-setup.exe"
 
 clean:
 	$(CARGO) clean
