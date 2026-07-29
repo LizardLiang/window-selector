@@ -1,6 +1,6 @@
-/// Manages the WS_EX_LAYERED alpha fade animation state.
-/// The actual SetLayeredWindowAttributes calls are made by the overlay module
-/// on each WM_TIMER tick.
+//! Manages the WS_EX_LAYERED alpha fade animation state.
+//! The actual SetLayeredWindowAttributes calls are made by the overlay module
+//! on each WM_TIMER tick.
 
 /// Starting alpha (transparent).
 pub const ALPHA_MIN: u8 = 0;

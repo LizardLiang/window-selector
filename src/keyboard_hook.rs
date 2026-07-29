@@ -105,19 +105,17 @@ unsafe extern "system" fn ll_keyboard_proc(
     let msg_id = w_param.0 as u32;
     let is_keydown = msg_id == WM_KEYDOWN || msg_id == WM_SYSKEYDOWN;
 
-    if is_keydown && HOOK_ACTIVE.load(Ordering::Relaxed) {
-        if l_param.0 != 0 {
-            let kbd = &*(l_param.0 as *const KBDLLHOOKSTRUCT);
-            let vk = kbd.vkCode;
+    if is_keydown && HOOK_ACTIVE.load(Ordering::Relaxed) && l_param.0 != 0 {
+        let kbd = &*(l_param.0 as *const KBDLLHOOKSTRUCT);
+        let vk = kbd.vkCode;
 
-            let handler_ptr = KEY_HANDLER.load(Ordering::Relaxed);
-            if handler_ptr != 0 {
-                let handler: KeyHandler = std::mem::transmute(handler_ptr);
-                let swallow = handler(vk);
-                if swallow {
-                    // Return non-zero to swallow the keystroke.
-                    return LRESULT(1);
-                }
+        let handler_ptr = KEY_HANDLER.load(Ordering::Relaxed);
+        if handler_ptr != 0 {
+            let handler: KeyHandler = std::mem::transmute(handler_ptr);
+            let swallow = handler(vk);
+            if swallow {
+                // Return non-zero to swallow the keystroke.
+                return LRESULT(1);
             }
         }
     }

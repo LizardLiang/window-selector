@@ -10,7 +10,8 @@ pub fn load_app_icon() -> windows::core::Result<HICON> {
         let instance = GetModuleHandleW(PCWSTR::null())?;
         let handle = LoadImageW(
             instance,
-            PCWSTR(1 as *const u16), // resource ID 1 (MAKEINTRESOURCE)
+            // resource ID 1 (MAKEINTRESOURCE): a bare integer, not a real pointer
+            PCWSTR(std::ptr::without_provenance(1)),
             IMAGE_ICON,
             0,
             0,

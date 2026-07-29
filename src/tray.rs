@@ -36,7 +36,7 @@ pub fn add_tray_icon(hwnd: HWND) -> windows::core::Result<()> {
             tooltip[i] = c;
         }
 
-        let mut nid = NOTIFYICONDATAW {
+        let nid = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: hwnd,
             uID: TRAY_ICON_ID,
@@ -47,7 +47,7 @@ pub fn add_tray_icon(hwnd: HWND) -> windows::core::Result<()> {
             ..Default::default()
         };
 
-        Shell_NotifyIconW(NIM_ADD, &mut nid).ok()?;
+        Shell_NotifyIconW(NIM_ADD, &nid).ok()?;
         tracing::info!("Tray icon added");
         Ok(())
     }
@@ -56,13 +56,13 @@ pub fn add_tray_icon(hwnd: HWND) -> windows::core::Result<()> {
 /// Remove the system tray icon.
 pub fn remove_tray_icon(hwnd: HWND) {
     unsafe {
-        let mut nid = NOTIFYICONDATAW {
+        let nid = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: hwnd,
             uID: TRAY_ICON_ID,
             ..Default::default()
         };
-        let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
+        let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
         tracing::info!("Tray icon removed");
     }
 }
@@ -88,7 +88,7 @@ pub fn show_balloon(hwnd: HWND, title: &str, text: &str) {
             balloon_text[i] = c;
         }
 
-        let mut nid = NOTIFYICONDATAW {
+        let nid = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: hwnd,
             uID: TRAY_ICON_ID,
@@ -99,7 +99,7 @@ pub fn show_balloon(hwnd: HWND, title: &str, text: &str) {
             ..Default::default()
         };
 
-        let _ = Shell_NotifyIconW(NIM_MODIFY, &mut nid);
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
         tracing::info!("Balloon notification shown: {}", title);
     }
 }

@@ -113,7 +113,7 @@ pub fn get_launch_at_startup() -> bool {
         }
 
         // Allocate buffer and read value
-        let num_wchars = (data_size as usize + 1) / 2;
+        let num_wchars = (data_size as usize).div_ceil(2);
         let mut buf: Vec<u16> = vec![0u16; num_wchars + 1];
         let buf_ptr = buf.as_mut_ptr() as *mut u8;
         let mut actual_size = data_size;

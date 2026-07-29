@@ -983,10 +983,7 @@ fn calculate_label_positions_visible_region(
         // Find the largest visible rectangle by area
         let best_rect = visible
             .iter()
-            .max_by_key(|r| {
-                let area = (r.right - r.left) * (r.bottom - r.top);
-                area
-            })
+            .max_by_key(|r| (r.right - r.left) * (r.bottom - r.top))
             .copied()
             .unwrap_or(simple_rect);
 

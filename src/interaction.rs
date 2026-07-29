@@ -72,7 +72,7 @@ pub fn handle_key_down(
     // Use GetAsyncKeyState (physical key state) instead of GetKeyState
     // because the low-level keyboard hook swallows all keystrokes before the
     // message queue processes them, so GetKeyState never sees Ctrl as pressed.
-    let ctrl_held = unsafe { (GetAsyncKeyState(VK_CONTROL.0 as i32) as i16) < 0 };
+    let ctrl_held = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 };
 
     handle_key_down_with_ctrl_state(vk_code, state, windows, tags, direct_switch, ctrl_held)
 }
