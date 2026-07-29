@@ -106,6 +106,7 @@ The application starts minimized to the system tray. Press the activation hotkey
 | Dismiss overlay | Escape |
 | Tag a window's app with a number | Ctrl+1 through Ctrl+9 (while a window is selected) |
 | Jump to the tagged app | 1 through 9 |
+| Move selected window to a monitor's center | Shift+1 through Shift+9 (while a window is selected; each monitor shows its number in the overlay) |
 
 ### Letter Assignment
 
