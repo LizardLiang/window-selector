@@ -54,26 +54,26 @@ jobs:
         run: |
           ls -lh target/x86_64-pc-windows-msvc/release/window-selector.exe
 
+      # The installer is a required release artifact, so this step must fail the
+      # run rather than swallow an error. It previously caught install failures
+      # and let the release publish binary-only, which meant a broken toolchain
+      # produced a half release instead of an obvious red run.
       - name: Install NSIS
         id: nsis
         shell: pwsh
         run: |
-          # Attempt to install NSIS via winget; mark as available if it succeeds.
-          try {
-            winget install NSIS.NSIS --silent --accept-package-agreements --accept-source-agreements
-            # Refresh PATH so makensis is visible to subsequent steps.
-            $nsisDir = "C:\Program Files (x86)\NSIS"
-            echo "$nsisDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-            echo "available=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            Write-Host "NSIS installed successfully."
-          } catch {
-            Write-Host "NSIS installation failed or winget unavailable: $_"
-            echo "available=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          winget install NSIS.NSIS --silent --accept-package-agreements --accept-source-agreements
+          # Refresh PATH so makensis is visible to subsequent steps.
+          $nsisDir = "C:\Program Files (x86)\NSIS"
+          echo "$nsisDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          if (-not (Test-Path "$nsisDir\makensis.exe")) {
+            Write-Host "::error::NSIS installed but makensis.exe not found at $nsisDir"
+            exit 1
           }
+          Write-Host "NSIS installed successfully."
 
       - name: Build NSIS installer
         id: installer
-        if: steps.nsis.outputs.available == 'true'
         shell: pwsh
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -85,12 +85,14 @@ jobs:
           $installerPath = "target\$target\release\WindowSelector-${env:VERSION}-setup.exe"
           & makensis /DVERSION=$env:VERSION /DTARGET=$target installer\installer.nsi
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "makensis failed with exit code $LASTEXITCODE"
-            echo "built=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            Write-Host "::error::makensis failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+          if (-not (Test-Path $installerPath)) {
+            Write-Host "::error::makensis reported success but $installerPath is missing"
             exit 1
           }
           echo "path=${installerPath}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          echo "built=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Host "Installer built: $installerPath"
 
       - name: Stage release artifacts
@@ -98,23 +100,18 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          INSTALLER_BUILT: ${{ steps.installer.outputs.built }}
           INSTALLER_PATH: ${{ steps.installer.outputs.path }}
         run: |
+          set -euo pipefail
           mkdir -p release-artifacts
 
-          # Always include the raw binary.
           cp target/x86_64-pc-windows-msvc/release/window-selector.exe \
              release-artifacts/window-selector-${VERSION}-x86_64.exe
 
-          # Include installer when it was built successfully.
-          if [[ "${INSTALLER_BUILT}" == "true" && -f "${INSTALLER_PATH}" ]]; then
-            cp "${INSTALLER_PATH}" \
-               "release-artifacts/WindowSelector-${VERSION}-setup.exe"
-            echo "has_installer=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_installer=false" >> "$GITHUB_OUTPUT"
-          fi
+          # Both artifacts are required; earlier steps fail the run if the
+          # installer could not be produced, so a missing file here is a bug.
+          cp "${INSTALLER_PATH}" \
+             "release-artifacts/WindowSelector-${VERSION}-setup.exe"
 
           ls -lh release-artifacts/
 
@@ -136,9 +133,6 @@ jobs:
 
             **Portable binary:**
             Download `window-selector-${{ steps.version.outputs.version }}-x86_64.exe` and place it anywhere you like.
-
-            > **Note:** The installer may not be present for all releases if NSIS is unavailable in CI.
-            > In that case, use the portable binary.
 
             ## System Requirements
             - Windows 10 or 11 (64-bit)
