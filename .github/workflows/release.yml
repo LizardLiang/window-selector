@@ -54,23 +54,52 @@ jobs:
         run: |
           ls -lh target/x86_64-pc-windows-msvc/release/window-selector.exe
 
-      # The installer is a required release artifact, so this step must fail the
-      # run rather than swallow an error. It previously caught install failures
-      # and let the release publish binary-only, which meant a broken toolchain
-      # produced a half release instead of an obvious red run.
+      # The installer is a required release artifact, so this step tries hard to
+      # obtain NSIS before giving up: use a preinstalled copy if the runner image
+      # has one, else Chocolatey (which ships on the image), else winget. Failing
+      # the run is the last resort, not the first response to a flaky registry.
       - name: Install NSIS
         id: nsis
         shell: pwsh
         run: |
-          winget install NSIS.NSIS --silent --accept-package-agreements --accept-source-agreements
-          # Refresh PATH so makensis is visible to subsequent steps.
+          $ErrorActionPreference = "Continue"
           $nsisDir = "C:\Program Files (x86)\NSIS"
-          echo "$nsisDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          if (-not (Test-Path "$nsisDir\makensis.exe")) {
-            Write-Host "::error::NSIS installed but makensis.exe not found at $nsisDir"
+
+          function Get-Makensis {
+            $cmd = Get-Command makensis -ErrorAction SilentlyContinue
+            if ($cmd) { return $cmd.Source }
+            if (Test-Path "$nsisDir\makensis.exe") { return "$nsisDir\makensis.exe" }
+            return $null
+          }
+
+          $makensis = Get-Makensis
+          if ($makensis) {
+            Write-Host "NSIS already present at $makensis; skipping install."
+          } else {
+            Write-Host "Installing NSIS via Chocolatey..."
+            choco install nsis --no-progress -y
+            $makensis = Get-Makensis
+            if (-not $makensis) {
+              Write-Host "Chocolatey did not yield makensis; falling back to winget."
+              winget install NSIS.NSIS --silent --accept-package-agreements --accept-source-agreements
+              $makensis = Get-Makensis
+            }
+          }
+
+          if (-not $makensis) {
+            Write-Host "::error::NSIS unavailable: makensis.exe not found after Chocolatey and winget."
             exit 1
           }
-          Write-Host "NSIS installed successfully."
+
+          # Put the install dir on PATH for later steps, then prove the binary
+          # actually runs -- presence on disk is not the same as being usable.
+          echo (Split-Path $makensis) | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $makensis /VERSION
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::makensis found at $makensis but failed to run."
+            exit 1
+          }
+          Write-Host "NSIS ready: $makensis"
 
       - name: Build NSIS installer
         id: installer
