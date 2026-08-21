@@ -517,7 +517,7 @@ impl OverlayManager {
                 LWA_COLORKEY,
             );
 
-            // Force
+            // Request a repaint under the final color-key mode.
             let _ = InvalidateRect(self.overlay_hwnds[0], None, true);
         }
 
