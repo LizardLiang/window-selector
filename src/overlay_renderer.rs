@@ -889,8 +889,10 @@ fn calculate_label_positions_auto_nudge(
         let base_x = label_x;
         for _ in 0..MAX_ITERATIONS {
             let collides = placed.iter().any(|((px1, py1), (px2, py2))| {
-                label_x < *px2 && label_x + label_w > *px1 &&
-                label_y < *py2 && label_y + label_h > *py1
+                label_x < *px2
+                    && label_x + label_w > *px1
+                    && label_y < *py2
+                    && label_y + label_h > *py1
             });
 
             if !collides {
@@ -1025,10 +1027,10 @@ fn calculate_label_positions_visible_region(
                     .max_by_key(|r| (r.right - r.left) * (r.bottom - r.top))
                     .copied()
                     .unwrap_or(simple_rect);
-                let x = (fallback.left as f32 + padding)
-                    .min(fallback.right as f32 - label_w - padding);
-                let y = (fallback.top as f32 + padding)
-                    .min(fallback.bottom as f32 - label_h - padding);
+                let x =
+                    (fallback.left as f32 + padding).min(fallback.right as f32 - label_w - padding);
+                let y =
+                    (fallback.top as f32 + padding).min(fallback.bottom as f32 - label_h - padding);
                 (x, y)
             }
         };
