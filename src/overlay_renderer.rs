@@ -873,37 +873,37 @@ fn calculate_label_positions_auto_nudge(
         };
 
         let mut label_x = base_pos.0 - overlay_offset.0 as f32;
-        let mut label_y = base_pos.1 - overlay_offset.1 as f32;
+        let label_y = base_pos.1 - overlay_offset.1 as f32;
         let label_w = LABEL_MODE_WIDTH;
         let label_h = LABEL_MODE_HEIGHT;
 
-        // Max nudge: don't push more than 80% of the window width
+        // Max nudge: don't push more than 80% of the window width.
+        // Only nudge horizontally so labels stay near the window's title bar.
         let window_w = (window_rect.right - window_rect.left) as f32;
         let max_nudge_x = (window_w * 0.8).max(label_w * 2.0);
-        let max_nudge_y = (window_rect.bottom - window_rect.top) as f32 * 0.8;
 
-        // Nudge step size
+        // Nudge step size — horizontal only
         const NUDGE_STEP: f32 = 20.0;
         const MAX_ITERATIONS: usize = 50;
 
+        let base_x = label_x;
         for _ in 0..MAX_ITERATIONS {
             let collides = placed.iter().any(|((px1, py1), (px2, py2))| {
-                label_x < *px2 && label_x + label_w > *px1 &&
-                label_y < *py2 && label_y + label_h > *py1
+                label_x < *px2
+                    && label_x + label_w > *px1
+                    && label_y < *py2
+                    && label_y + label_h > *py1
             });
 
             if !collides {
                 break;
             }
 
-            // Nudge diagonally right+down
+            // Nudge horizontally only — keep Y fixed near the title bar
             label_x += NUDGE_STEP;
-            label_y += NUDGE_STEP;
 
             // Stop if we've nudged too far
-            if label_x - (base_pos.0 - overlay_offset.0 as f32) > max_nudge_x ||
-               label_y - (base_pos.1 - overlay_offset.1 as f32) > max_nudge_y {
-                // Give up and use the last position (may still overlap, but that's the best we can do)
+            if label_x - base_x > max_nudge_x {
                 break;
             }
         }
@@ -916,7 +916,7 @@ fn calculate_label_positions_auto_nudge(
 }
 
 /// Calculate label positions using the VisibleRegion strategy.
-/// Labels are placed inside the largest visible (non-occluded) rectangle of each window.
+/// Labels are placed in a visible region as close as possible to each window's top-left corner.
 /// Returns a Vec of Option<(x, y)> in overlay client coordinates.
 fn calculate_label_positions_visible_region(
     windows: &[WindowInfo],
@@ -980,17 +980,60 @@ fn calculate_label_positions_visible_region(
             continue;
         }
 
-        // Find the largest visible rectangle by area
-        let best_rect = visible
-            .iter()
-            .max_by_key(|r| (r.right - r.left) * (r.bottom - r.top))
-            .copied()
-            .unwrap_or(simple_rect);
+        // Ideal label position: the window's natural top-left (just below the title
+        // bar), in screen coordinates. We keep the label as close to this as possible.
+        let (ideal_x, ideal_y) = calculate_label_position(&window_rect);
 
-        // Place label inside the best visible rectangle with padding
         let padding = 8.0_f32;
-        let label_x = (best_rect.left as f32 + padding).min(best_rect.right as f32 - LABEL_MODE_WIDTH - padding);
-        let label_y = (best_rect.top as f32 + padding).min(best_rect.bottom as f32 - LABEL_MODE_HEIGHT - padding);
+        let label_w = LABEL_MODE_WIDTH;
+        let label_h = LABEL_MODE_HEIGHT;
+
+        // Among the visible sub-rectangles, pick the placement closest to the ideal
+        // top-left position. Only consider rectangles large enough to fully contain
+        // the label. This keeps labels near the title bar and avoids drifting to the
+        // vertical center just because a larger visible region happens to be
+        // mid-window (the old "largest area" heuristic caused exactly that).
+        let mut best: Option<(f32, f32, f32)> = None; // (x, y, dist_sq)
+        for r in &visible {
+            let rw = (r.right - r.left) as f32;
+            let rh = (r.bottom - r.top) as f32;
+            // Skip rectangles too small to hold the label with padding.
+            if rw < label_w + padding * 2.0 || rh < label_h + padding * 2.0 {
+                continue;
+            }
+            // Clamp the ideal position into this visible rectangle.
+            let cx = ideal_x
+                .max(r.left as f32 + padding)
+                .min(r.right as f32 - label_w - padding);
+            let cy = ideal_y
+                .max(r.top as f32 + padding)
+                .min(r.bottom as f32 - label_h - padding);
+            let dx = cx - ideal_x;
+            let dy = cy - ideal_y;
+            let dist_sq = dx * dx + dy * dy;
+            if best.map_or(true, |(_, _, bd)| dist_sq < bd) {
+                best = Some((cx, cy, dist_sq));
+            }
+        }
+
+        // Fallback: no visible rectangle is large enough to hold the label — use the
+        // largest visible region and clamp. This may still land mid-window, but it
+        // is the only visible spot for a heavily occluded window.
+        let (label_x, label_y) = match best {
+            Some((x, y, _)) => (x, y),
+            None => {
+                let fallback = visible
+                    .iter()
+                    .max_by_key(|r| (r.right - r.left) * (r.bottom - r.top))
+                    .copied()
+                    .unwrap_or(simple_rect);
+                let x =
+                    (fallback.left as f32 + padding).min(fallback.right as f32 - label_w - padding);
+                let y =
+                    (fallback.top as f32 + padding).min(fallback.bottom as f32 - label_h - padding);
+                (x, y)
+            }
+        };
 
         result.push(Some((
             label_x - overlay_offset.0 as f32,
